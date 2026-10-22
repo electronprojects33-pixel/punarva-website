@@ -56,10 +56,12 @@ class SorterApp {
   private lastDetectionTime: number = 0;
   private lastFrameAnalysisTime: number = 0;
   private animationFrameId: number | null = null;
-  private isProcessingFrame: boolean = false;
+  private isReconnecting: boolean = false;
   private currentFacingMode: 'environment' | 'user' = APP_CONFIG.cameraFacingMode;
   private hasDetectedForCurrentTrigger: boolean = false;
-  private checkCountForCurrentTrigger: number = 0;
+  private lastCheckRequestTime: number = 0;
+  private lastBottleResult: GeminiVisionResult | null = null;
+  private lastBottleResultAt: number = 0;
 
   constructor() {
     this.bindDom();
@@ -67,6 +69,7 @@ class SorterApp {
     this.setupListeners();
     this.initFirebase();
     this.initPWA();
+    this.setupGeminiLive();
     this.updateUIForState('DISARMED');
     this.logDiagnostic('SYSTEM', 'AeroSort initialized with Google Gemini Live Vision.');
   }
@@ -232,14 +235,12 @@ class SorterApp {
 
     if (triggered) {
       this.hasDetectedForCurrentTrigger = false;
-      this.checkCountForCurrentTrigger = 0;
       this.logDiagnostic('RTDB TRIGGER', `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Activating camera feed & Gemini Vision visual feed!`);
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
     } else {
       this.hasDetectedForCurrentTrigger = false;
-      this.checkCountForCurrentTrigger = 0;
       this.logDiagnostic('RTDB TRIGGER', `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Pausing Gemini Vision, camera in standby.`);
       this.state = 'STANDBY';
       this.hudRenderer.clear();
@@ -250,14 +251,14 @@ class SorterApp {
   // Arm the system (requests camera, wake lock, checks Gemini API key)
   public async armSystem() {
     // Check if Gemini API key is configured
-    if (!geminiVision.isReady()) {
+    if (!geminiVision.hasApiKey()) {
       this.logDiagnostic('GEMINI ERROR', 'Gemini API key is missing. Please add your key to GEMINI_API_KEY in src/config.ts or .env');
       alert('Please set your Gemini API key in src/config.ts or .env before arming.');
       return;
     }
 
     this.btnArmStageEl.disabled = true;
-    this.logDiagnostic('SYSTEM', 'Arming system: starting camera feed and engaging Gemini Vision...');
+    this.logDiagnostic('SYSTEM', 'Arming system: starting camera feed and connecting Gemini Live...');
 
     try {
       // 1. Acquire Screen Wake Lock
@@ -265,6 +266,13 @@ class SorterApp {
 
       // 2. Start Camera
       await this.startCamera();
+
+      // 3. Open the Gemini Live WebSocket session
+      try {
+        await geminiVision.connect();
+      } catch (e: any) {
+        this.logDiagnostic('GEMINI LIVE', `Initial connection failed (${e.message || e}); will retry while scanning.`);
+      }
 
       soundEffects.playArmedChime();
 
@@ -296,6 +304,8 @@ class SorterApp {
   // Disarms camera and releases resources
   public disarmSystem() {
     this.state = 'DISARMED';
+    geminiVision.disconnect();
+    this.lastBottleResult = null;
     soundEffects.playDisarmSound();
     wakeLockManager.releaseLock();
 
@@ -350,93 +360,102 @@ class SorterApp {
     this.logDiagnostic('CAMERA', `Camera stream running (${this.currentFacingMode})`);
   }
 
-  // Real-time camera visual feed pipeline powered by Google Gemini Vision
+  // Wires Gemini Live (WebSocket) callbacks to the UI and Firestore actions
+  private setupGeminiLive() {
+    geminiVision.onStatus = (msg) => this.logDiagnostic('GEMINI LIVE', msg);
+
+    geminiVision.onClose = (reason) => {
+      this.logDiagnostic('GEMINI LIVE', reason);
+    };
+
+    geminiVision.onNoBottle = (result) => {
+      if (this.state !== 'SCANNING' || this.hasDetectedForCurrentTrigger) return;
+      this.statModelLatencyEl.innerText = `${result.inferenceMs}`;
+      this.statLivePredictionEl.innerText = 'No Bottle';
+      this.statLivePredictionEl.style.color = '#0284c7';
+      this.tickerClassNameEl.innerText = 'No Bottle';
+      this.tickerScoreEl.innerText = '--';
+      this.tickerBarFillEl.style.width = '0%';
+      this.tickerBarFillEl.className = 'ticker-bar-fill other';
+      this.tickerDotEl.className = 'ticker-dot active-other';
+      this.tickerLogMsgEl.innerText = `[Gemini Live] No plastic bottle in view (${result.inferenceMs}ms)`;
+    };
+
+    geminiVision.onDetection = (result) => {
+      if ((this.state !== 'SCANNING' && this.state !== 'DETECTED') || this.hasDetectedForCurrentTrigger) return;
+
+      const scorePct = Math.round(result.confidence * 100);
+      this.statModelLatencyEl.innerText = `${result.inferenceMs}`;
+
+      if (result.confidence < APP_CONFIG.confidenceThreshold) {
+        this.logDiagnostic('GEMINI LIVE', `Bottle reported but confidence ${scorePct}% is below threshold, ignoring.`);
+        return;
+      }
+
+      this.hasDetectedForCurrentTrigger = true;
+      this.lastBottleResult = result;
+      this.lastBottleResultAt = performance.now();
+
+      this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
+      this.statLivePredictionEl.style.color = '#059669';
+      this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
+      this.tickerScoreEl.innerText = `${scorePct}%`;
+      this.tickerBarFillEl.style.width = `${scorePct}%`;
+      this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
+      this.tickerDotEl.className = 'ticker-dot active-plastic';
+
+      this.onBottleIdentified(result);
+    };
+  }
+
+  // Re-opens the Live WebSocket session if it dropped while scanning
+  private async ensureGeminiConnection() {
+    if (this.isReconnecting || geminiVision.isConnected()) return;
+    this.isReconnecting = true;
+    try {
+      await geminiVision.connect();
+    } catch (err: any) {
+      this.logDiagnostic('GEMINI LIVE', `Connect failed: ${err.message || err}. Retrying...`);
+      await new Promise((r) => setTimeout(r, 2000));
+    } finally {
+      this.isReconnecting = false;
+    }
+  }
+
+  // Real-time camera pipeline: streams frames to Gemini Live while object_detected == true
   private startFramePipeline() {
-    const loop = async (timestamp: number) => {
+    const loop = (timestamp: number) => {
       this.calculateFps(timestamp);
 
       if (this.videoEl.videoWidth > 0) {
         this.hudRenderer.syncSize(this.videoEl);
       }
 
-      // GEMINI RUNS IN SCANNING / DETECTED (when object_detected == true)
       if (this.state === 'SCANNING' || this.state === 'DETECTED') {
         this.hudRenderer.clear();
-        this.hudRenderer.drawScanningGuide(true);
+        this.hudRenderer.drawScanningGuide(!this.hasDetectedForCurrentTrigger);
 
-        // Quota Guard 1: If bottle was already detected for this trigger event, don't spam Gemini
-        if (this.hasDetectedForCurrentTrigger) {
-          this.animationFrameId = requestAnimationFrame(loop);
-          return;
-        }
+        // Keep the detection banner visible for a few seconds after a bottle is confirmed
+        const showBanner = this.lastBottleResult && performance.now() - this.lastBottleResultAt < 3000;
+        this.hudRenderer.renderGeminiVisionHUD(showBanner ? this.lastBottleResult : null);
 
-        // Quota Guard 2: If maximum checks per trigger event reached (non-bottle item), don't burn quota
-        if (this.checkCountForCurrentTrigger >= (APP_CONFIG.maxChecksPerTrigger || 3)) {
-          this.tickerLogMsgEl.innerText = `[Gemini Vision] Analyzed item: Not a bottle. Awaiting next object.`;
-          this.animationFrameId = requestAnimationFrame(loop);
-          return;
-        }
+        // Stream only while no bottle has been counted for this signal (saves tokens)
+        if (!this.hasDetectedForCurrentTrigger) {
+          if (!geminiVision.isConnected()) {
+            this.ensureGeminiConnection();
+          } else {
+            const now = performance.now();
+            if (now - this.lastFrameAnalysisTime >= APP_CONFIG.frameIntervalMs) {
+              this.lastFrameAnalysisTime = now;
+              const brightness = geminiVision.sendFrame(this.videoEl);
 
-        const now = performance.now();
-        const timeSinceLastFrame = now - this.lastFrameAnalysisTime;
-
-        // Check throttle interval and ensure only one request is in-flight
-        if (!this.isProcessingFrame && geminiVision.isReady() && timeSinceLastFrame >= APP_CONFIG.feedIntervalMs) {
-          this.isProcessingFrame = true;
-          this.lastFrameAnalysisTime = now;
-          this.checkCountForCurrentTrigger++;
-
-          try {
-            const result: GeminiVisionResult | null = await geminiVision.analyzeFrame(this.videoEl);
-            if (result) {
-              const { isPlasticBottle, confidence, reason, inferenceMs } = result;
-              const scorePct = Math.round(confidence * 100);
-
-              this.statModelLatencyEl.innerText = `${inferenceMs}`;
-
-              // 1. Update on-screen telemetry prediction chip
-              if (isPlasticBottle) {
-                this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
-                this.statLivePredictionEl.style.color = '#059669';
-              } else {
-                this.statLivePredictionEl.innerText = `No Bottle`;
-                this.statLivePredictionEl.style.color = '#0284c7';
-              }
-
-              // 2. Update Live Diagnostics Ticker card
-              if (isPlasticBottle) {
-                this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
-                this.tickerScoreEl.innerText = `${scorePct}%`;
-                this.tickerBarFillEl.style.width = `${scorePct}%`;
-                this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
-                this.tickerDotEl.className = 'ticker-dot active-plastic';
-              } else {
-                this.tickerClassNameEl.innerText = 'No Bottle';
-                this.tickerScoreEl.innerText = `${scorePct}%`;
-                this.tickerBarFillEl.style.width = `${scorePct}%`;
-                this.tickerBarFillEl.className = 'ticker-bar-fill other';
-                this.tickerDotEl.className = 'ticker-dot active-other';
-              }
-              this.tickerLogMsgEl.innerText = `[Gemini Vision] ${reason}`;
-
-              // 3. Render HUD on canvas (viewfinder brackets + detection banner)
-              this.hudRenderer.renderGeminiVisionHUD(result);
-
-              // 4. Log detection attempt
-              console.log(
-                `👁️ [GEMINI LIVE FEED] [${inferenceMs}ms] (Check ${this.checkCountForCurrentTrigger}/${APP_CONFIG.maxChecksPerTrigger}) Result: ${isPlasticBottle ? 'BOTTLE' : 'NO BOTTLE'} (${scorePct}%) | Reason: "${reason}"`
-              );
-
-              // 5. Handle verified plastic bottle detection
-              if (isPlasticBottle && confidence >= APP_CONFIG.confidenceThreshold) {
-                this.hasDetectedForCurrentTrigger = true;
-                this.onBottleIdentified(result);
+              if (brightness >= 0 && brightness < 8) {
+                this.tickerLogMsgEl.innerText = '[Camera] Frame too dark, waiting for exposure...';
+              } else if (brightness >= 0 && now - this.lastCheckRequestTime >= APP_CONFIG.checkIntervalMs && !geminiVision.isBusy()) {
+                this.lastCheckRequestTime = now;
+                geminiVision.requestCheck();
               }
             }
-          } catch (feedErr) {
-            console.error('Gemini frame feed error:', feedErr);
-          } finally {
-            this.isProcessingFrame = false;
           }
         }
       }
