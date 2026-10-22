@@ -1,6 +1,8 @@
+
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+  base: '/punarva-website/',
   server: {
     host: true, // Exposes to local network for testing on mobile device/tablets
     port: 5173,
