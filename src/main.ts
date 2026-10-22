@@ -8,13 +8,21 @@ import { firebaseService } from './services/firebase';
 import { geminiVision } from './services/gemini';
 import { HudRenderer } from './ui/hud';
 
+const ADMIN_PASSWORD = 'punarva123';
+const THANK_YOU_DURATION_MS = 4000;
+const RTDB_BASE_URL =
+  'https://plastic-bottle-sorting-machine-default-rtdb.asia-southeast1.firebasedatabase.app';
+
 class SorterApp {
   private state: SorterState = 'DISARMED';
   private currentStream: MediaStream | null = null;
-  private hudRenderer: HudRenderer;
-  private audioEnabled: boolean = APP_CONFIG.enableAudio;
+  private hudRenderer!: HudRenderer;
+  private audioEnabled = APP_CONFIG.enableAudio;
+  private adminAuthenticated = false;
+  private thankYouTimer: ReturnType<typeof setTimeout> | null = null;
+  private manualOverride = false;
+  private manualBusy = false;
 
-  // DOM Elements
   private videoEl!: HTMLVideoElement;
   private canvasEl!: HTMLCanvasElement;
   private stateBadgeEl!: HTMLElement;
@@ -34,31 +42,45 @@ class SorterApp {
   private pillRtdbEl!: HTMLElement;
   private pillWakeLockEl!: HTMLElement;
 
-  // Telemetry DOM
   private statTotalBottlesEl!: HTMLElement;
+  private adminStatTotalBottlesEl!: HTMLElement;
   private statLivePredictionEl!: HTMLElement;
   private statModelLatencyEl!: HTMLElement;
   private statStreamFpsEl!: HTMLElement;
 
-  // Live On-Screen AI Diagnostics Ticker
-  private aiLiveTickerEl!: HTMLElement;
   private tickerDotEl!: HTMLElement;
   private tickerClassNameEl!: HTMLElement;
   private tickerScoreEl!: HTMLElement;
   private tickerBarFillEl!: HTMLElement;
   private tickerLogMsgEl!: HTMLElement;
 
-  // Runtime Tracking
-  private frameCount: number = 0;
-  private lastFpsCalcTime: number = performance.now();
-  private currentFps: number = 0;
-  private totalBottlesDetected: number = 0;
-  private lastDetectionTime: number = 0;
+  private publicScreenEl!: HTMLElement;
+  private adminLoginScreenEl!: HTMLElement;
+  private adminScreenEl!: HTMLElement;
+  private adminPasswordInputEl!: HTMLInputElement;
+  private adminLoginErrorEl!: HTMLElement;
+  private publicStatusEl!: HTMLElement;
+  private publicStatusTextEl!: HTMLElement;
+  private publicThankYouEl!: HTMLElement;
+
+  private manualToggleEl!: HTMLInputElement;
+  private manualStatusEl!: HTMLElement;
+  private manualControlsEl!: HTMLElement;
+  private manualAngleEl!: HTMLInputElement;
+  private btnSendServoEl!: HTMLButtonElement;
+  private btnManualCaptureEl!: HTMLButtonElement;
+  private manualResultEl!: HTMLElement;
+
+  private frameCount = 0;
+  private lastFpsCalcTime = performance.now();
+  private totalBottlesDetected = 0;
+  private lastDetectionTime = 0;
   private animationFrameId: number | null = null;
-  private currentFacingMode: 'environment' | 'user' = APP_CONFIG.cameraFacingMode;
-  private hasDetectedForCurrentTrigger: boolean = false;
+  private currentFacingMode: 'environment' | 'user' =
+    APP_CONFIG.cameraFacingMode;
+  private hasDetectedForCurrentTrigger = false;
   private lastBottleResult: GeminiVisionResult | null = null;
-  private lastBottleResultAt: number = 0;
+  private lastBottleResultAt = 0;
 
   constructor() {
     this.bindDom();
@@ -67,46 +89,69 @@ class SorterApp {
     this.initFirebase();
     this.initPWA();
     this.updateUIForState('DISARMED');
-    this.logDiagnostic('SYSTEM', 'AeroSort initialized with Google Gemini REST API.');
+    this.updatePublicStatus();
+    this.logDiagnostic('SYSTEM', 'Punarva initialized with Google Gemini REST API.');
+  }
+
+  private getElement<T extends HTMLElement>(id: string): T {
+    const element = document.getElementById(id);
+    if (!element) {
+      throw new Error(`Required HTML element not found: #${id}`);
+    }
+    return element as T;
   }
 
   private bindDom() {
-    this.videoEl = document.getElementById('camera-video') as HTMLVideoElement;
-    this.canvasEl = document.getElementById('hud-canvas') as HTMLCanvasElement;
-    this.stateBadgeEl = document.getElementById('system-state-badge')!;
-    this.stateTextEl = document.getElementById('system-state-text')!;
-    this.scrollableContainerEl = document.getElementById('scrollable-container')!;
-    this.stageOverlayEl = document.getElementById('stage-overlay')!;
-    this.overlayDisarmedContentEl = document.getElementById('overlay-disarmed-content')!;
-    this.overlayStandbyContentEl = document.getElementById('overlay-standby-content')!;
-    this.adminResetSectionEl = document.getElementById('admin-reset-section')!;
-    this.resetSectionCountEl = document.getElementById('reset-section-count')!;
-    this.btnResetCounterEl = document.getElementById('btn-reset-counter') as HTMLButtonElement;
-    this.btnArmStageEl = document.getElementById('btn-arm-stage') as HTMLButtonElement;
-    this.btnToggleArmEl = document.getElementById('btn-toggle-arm') as HTMLButtonElement;
-    this.btnToggleArmLabel = document.getElementById('btn-toggle-arm-label')!;
-    this.btnFlipCamEl = document.getElementById('btn-flip-camera') as HTMLButtonElement;
-    this.btnToggleSoundEl = document.getElementById('btn-toggle-sound') as HTMLButtonElement;
-    this.pillRtdbEl = document.getElementById('pill-rtdb')!;
-    this.pillWakeLockEl = document.getElementById('pill-wakelock')!;
+    this.videoEl = this.getElement<HTMLVideoElement>('camera-video');
+    this.canvasEl = this.getElement<HTMLCanvasElement>('hud-canvas');
+    this.stateBadgeEl = this.getElement('system-state-badge');
+    this.stateTextEl = this.getElement('system-state-text');
+    this.scrollableContainerEl = this.getElement('scrollable-container');
+    this.stageOverlayEl = this.getElement('stage-overlay');
+    this.overlayDisarmedContentEl = this.getElement('overlay-disarmed-content');
+    this.overlayStandbyContentEl = this.getElement('overlay-standby-content');
+    this.adminResetSectionEl = this.getElement('admin-reset-section');
+    this.resetSectionCountEl = this.getElement('reset-section-count');
+    this.btnResetCounterEl = this.getElement<HTMLButtonElement>('btn-reset-counter');
+    this.btnArmStageEl = this.getElement<HTMLButtonElement>('btn-arm-stage');
+    this.btnToggleArmEl = this.getElement<HTMLButtonElement>('btn-toggle-arm');
+    this.btnToggleArmLabel = this.getElement('btn-toggle-arm-label');
+    this.btnFlipCamEl = this.getElement<HTMLButtonElement>('btn-flip-camera');
+    this.btnToggleSoundEl = this.getElement<HTMLButtonElement>('btn-toggle-sound');
+    this.pillRtdbEl = this.getElement('pill-rtdb');
+    this.pillWakeLockEl = this.getElement('pill-wakelock');
 
-    // Telemetry
-    this.statTotalBottlesEl = document.getElementById('stat-total-bottles')!;
-    this.statLivePredictionEl = document.getElementById('stat-live-prediction')!;
-    this.statModelLatencyEl = document.getElementById('stat-model-latency')!;
-    this.statStreamFpsEl = document.getElementById('stat-stream-fps')!;
+    this.statTotalBottlesEl = this.getElement('stat-total-bottles');
+    this.adminStatTotalBottlesEl = this.getElement('admin-stat-total-bottles');
+    this.statLivePredictionEl = this.getElement('stat-live-prediction');
+    this.statModelLatencyEl = this.getElement('stat-model-latency');
+    this.statStreamFpsEl = this.getElement('stat-stream-fps');
 
-    // Live AI Ticker
-    this.aiLiveTickerEl = document.getElementById('ai-live-ticker')!;
-    this.tickerDotEl = document.getElementById('ticker-dot')!;
-    this.tickerClassNameEl = document.getElementById('ticker-class-name')!;
-    this.tickerScoreEl = document.getElementById('ticker-score')!;
-    this.tickerBarFillEl = document.getElementById('ticker-bar-fill')!;
-    this.tickerLogMsgEl = document.getElementById('ticker-log-msg')!;
+    this.tickerDotEl = this.getElement('ticker-dot');
+    this.tickerClassNameEl = this.getElement('ticker-class-name');
+    this.tickerScoreEl = this.getElement('ticker-score');
+    this.tickerBarFillEl = this.getElement('ticker-bar-fill');
+    this.tickerLogMsgEl = this.getElement('ticker-log-msg');
+
+    this.publicScreenEl = this.getElement('public-screen');
+    this.adminLoginScreenEl = this.getElement('admin-login-screen');
+    this.adminScreenEl = this.getElement('admin-screen');
+    this.adminPasswordInputEl = this.getElement<HTMLInputElement>('admin-password');
+    this.adminLoginErrorEl = this.getElement('admin-login-error');
+    this.publicStatusEl = this.getElement('public-live-status');
+    this.publicStatusTextEl = this.getElement('public-system-status-text');
+    this.publicThankYouEl = this.getElement('public-thank-you');
+
+    this.manualToggleEl = this.getElement<HTMLInputElement>('manual-override-toggle');
+    this.manualStatusEl = this.getElement('manual-override-status');
+    this.manualControlsEl = this.getElement('manual-controls');
+    this.manualAngleEl = this.getElement<HTMLInputElement>('manual-servo-angle');
+    this.btnSendServoEl = this.getElement<HTMLButtonElement>('btn-send-servo');
+    this.btnManualCaptureEl = this.getElement<HTMLButtonElement>('btn-manual-capture');
+    this.manualResultEl = this.getElement('manual-result');
   }
 
-  // Centralized diagnostic logging for console & live mobile screen
-  private logDiagnostic(tag: string, message: string, data?: any) {
+  private logDiagnostic(tag: string, message: string, data?: unknown) {
     const timeStr = new Date().toLocaleTimeString([], {
       hour12: false,
       hour: '2-digit',
@@ -115,22 +160,256 @@ class SorterApp {
     });
     const formatted = `[${timeStr}] [${tag}] ${message}`;
 
-    if (data !== undefined) {
-      console.log(formatted, data);
-    } else {
-      console.log(formatted);
-    }
+    if (data !== undefined) console.log(formatted, data);
+    else console.log(formatted);
 
     if (this.tickerLogMsgEl) {
       this.tickerLogMsgEl.innerText = formatted;
     }
   }
 
+  // ---------- RTDB helpers (new paths, direct REST) ----------
+
+  private async rtdbPut(path: string, value: unknown) {
+    const response = await fetch(`${RTDB_BASE_URL}${path}.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(value)
+    });
+
+    if (!response.ok) {
+      throw new Error(`RTDB write ${path} failed (${response.status})`);
+    }
+  }
+
+  private async rtdbGet(path: string): Promise<unknown> {
+    const response = await fetch(`${RTDB_BASE_URL}${path}.json`);
+
+    if (!response.ok) {
+      throw new Error(`RTDB read ${path} failed (${response.status})`);
+    }
+
+    return response.json();
+  }
+
+  private writeBottleVerified(value: 'pending' | 'yes' | 'no') {
+    this.rtdbPut('/bottle_verified', value).catch((error) => {
+      this.logDiagnostic('RTDB ERROR', String(error));
+    });
+  }
+
+  // ---------- Manual override ----------
+
+  private updateManualOverrideUI() {
+    this.manualToggleEl.checked = this.manualOverride;
+    this.manualStatusEl.innerText = this.manualOverride ? 'ON' : 'OFF';
+    this.manualControlsEl.classList.toggle('hidden', !this.manualOverride);
+  }
+
+  private async setManualOverride(enabled: boolean) {
+    const previous = this.manualOverride;
+    this.manualOverride = enabled;
+    this.updateManualOverrideUI();
+
+    try {
+      await this.rtdbPut('/manual_override', enabled);
+      this.logDiagnostic('MANUAL', `Manual override ${enabled ? 'ON' : 'OFF'}.`);
+    } catch (error) {
+      this.manualOverride = previous;
+      this.updateManualOverrideUI();
+      this.logDiagnostic('MANUAL ERROR', String(error));
+      alert('Could not update manual override. Check the console.');
+    }
+  }
+
+  private async syncManualOverrideFromRtdb() {
+    try {
+      const value = await this.rtdbGet('/manual_override');
+      this.manualOverride = value === true;
+      this.updateManualOverrideUI();
+    } catch (error) {
+      this.logDiagnostic('MANUAL ERROR', String(error));
+    }
+  }
+
+  private async sendServoCommand() {
+    if (!this.adminAuthenticated || !this.manualOverride) return;
+
+    const angle = Math.round(Number(this.manualAngleEl.value));
+
+    if (!Number.isFinite(angle) || angle < 0 || angle > 180) {
+      alert('Enter a servo angle between 0 and 180.');
+      return;
+    }
+
+    this.btnSendServoEl.disabled = true;
+
+    try {
+      await this.rtdbPut('/move_servo', angle);
+      this.manualResultEl.innerText = `Servo command sent: ${angle}°`;
+      this.logDiagnostic('MANUAL', `Servo command ${angle} sent.`);
+    } catch (error) {
+      this.logDiagnostic('MANUAL ERROR', String(error));
+      alert('Could not send the servo command. Check the console.');
+    } finally {
+      this.btnSendServoEl.disabled = false;
+    }
+  }
+
+  private async manualCaptureAndAnalyze() {
+    if (!this.adminAuthenticated || !this.manualOverride || this.manualBusy) return;
+
+    if (!geminiVision.hasApiKey()) {
+      this.logDiagnostic('GEMINI ERROR', 'Gemini API key is missing.');
+      alert('Please configure your Gemini API key in .env.');
+      return;
+    }
+
+    if (geminiVision.isBusy()) {
+      this.logDiagnostic('GEMINI REST', 'Previous analysis is still in progress.');
+      return;
+    }
+
+    this.manualBusy = true;
+    this.btnManualCaptureEl.disabled = true;
+    this.manualResultEl.innerText = 'Turning on camera...';
+
+    const startedCamera = this.currentStream === null;
+
+    try {
+      if (startedCamera) {
+        await this.startCamera();
+        await new Promise((resolve) => setTimeout(resolve, 700));
+      }
+
+      // Show the live camera while capturing
+      this.stageOverlayEl.classList.add('hidden');
+
+      this.manualResultEl.innerText = 'Capturing & analyzing...';
+      this.statLivePredictionEl.innerText = 'Analyzing...';
+      this.statLivePredictionEl.style.color = '#38bdf8';
+      this.tickerClassNameEl.innerText = 'Manual Capture & Analyze...';
+      this.tickerScoreEl.innerText = '--';
+      this.tickerBarFillEl.style.width = '50%';
+      this.tickerBarFillEl.className = 'ticker-bar-fill';
+      this.tickerDotEl.className = 'ticker-dot';
+
+      const result = await geminiVision.analyzePhoto(this.videoEl);
+      this.statModelLatencyEl.innerText = String(result.inferenceMs);
+      const scorePct = Math.round(result.confidence * 100);
+
+      const isBottle =
+        result.isPlasticBottle &&
+        result.confidence >= APP_CONFIG.confidenceThreshold;
+
+      if (isBottle) {
+        this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
+        this.statLivePredictionEl.style.color = '#059669';
+        this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
+        this.tickerScoreEl.innerText = `${scorePct}%`;
+        this.tickerBarFillEl.style.width = `${scorePct}%`;
+        this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
+        this.tickerDotEl.className = 'ticker-dot active-plastic';
+        this.manualResultEl.innerText =
+          `Plastic bottle (${scorePct}%): ${result.reason}`;
+        this.writeBottleVerified('yes');
+      } else {
+        this.statLivePredictionEl.innerText = 'No Bottle';
+        this.statLivePredictionEl.style.color = '#0284c7';
+        this.tickerClassNameEl.innerText = result.isPlasticBottle
+          ? `Low Confidence (${scorePct}%)`
+          : 'Not a Plastic Bottle';
+        this.tickerScoreEl.innerText = `${scorePct}%`;
+        this.tickerBarFillEl.style.width = '0%';
+        this.tickerBarFillEl.className = 'ticker-bar-fill other';
+        this.tickerDotEl.className = 'ticker-dot active-other';
+        this.manualResultEl.innerText =
+          `Not a plastic bottle (${scorePct}%): ${result.reason}`;
+        this.writeBottleVerified('no');
+      }
+
+      this.tickerLogMsgEl.innerText =
+        `[Manual] ${result.reason} (${result.inferenceMs}ms)`;
+      this.logDiagnostic(
+        'MANUAL',
+        `Analysis done: ${isBottle ? 'bottle' : 'not a bottle'} (${scorePct}%).`
+      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logDiagnostic('MANUAL ERROR', `Manual capture failed: ${message}`);
+      this.statLivePredictionEl.innerText = 'API Error';
+      this.statLivePredictionEl.style.color = '#ef4444';
+      this.tickerClassNameEl.innerText = 'Analysis Failed';
+      this.manualResultEl.innerText = `Error: ${message}`;
+    } finally {
+      this.manualBusy = false;
+      this.btnManualCaptureEl.disabled = false;
+
+      // If the camera was only turned on for this capture, turn it off again
+      if (startedCamera) {
+        setTimeout(() => {
+          if (this.state === 'DISARMED' && !this.manualBusy) {
+            if (this.currentStream) {
+              this.currentStream.getTracks().forEach((track) => track.stop());
+              this.currentStream = null;
+            }
+            this.videoEl.srcObject = null;
+            this.stageOverlayEl.classList.remove('hidden');
+          }
+        }, 3000);
+      }
+    }
+  }
+
   private setupListeners() {
-    // Arm / Disarm toggle controls
+    // Public/admin navigation
+    this.getElement<HTMLButtonElement>('btn-open-admin')
+      .addEventListener('click', () => {
+        this.showScreen('login');
+        this.adminPasswordInputEl.value = '';
+        this.adminLoginErrorEl.classList.add('hidden');
+        this.adminPasswordInputEl.focus();
+      });
+
+    this.getElement<HTMLButtonElement>('btn-cancel-admin')
+      .addEventListener('click', () => this.showScreen('public'));
+
+    this.getElement<HTMLFormElement>('admin-login-form')
+      .addEventListener('submit', (event) => {
+        event.preventDefault();
+
+        if (this.adminPasswordInputEl.value === ADMIN_PASSWORD) {
+          this.adminAuthenticated = true;
+          this.adminLoginErrorEl.classList.add('hidden');
+          this.adminPasswordInputEl.value = '';
+          this.showScreen('admin');
+          void this.syncManualOverrideFromRtdb();
+          this.logDiagnostic('ADMIN', 'Administrator authenticated.');
+        } else {
+          this.adminLoginErrorEl.classList.remove('hidden');
+          this.adminPasswordInputEl.value = '';
+          this.adminPasswordInputEl.focus();
+        }
+      });
+
+    this.getElement<HTMLButtonElement>('btn-admin-logout')
+      .addEventListener('click', () => {
+        if (this.state !== 'DISARMED') {
+          this.disarmSystem();
+        }
+        this.adminAuthenticated = false;
+        this.showScreen('public');
+        this.logDiagnostic('ADMIN', 'Administrator logged out.');
+      });
+
     const toggleArmHandler = () => {
+      if (!this.adminAuthenticated) {
+        alert('Please log in as administrator first.');
+        return;
+      }
+
       if (this.state === 'DISARMED') {
-        this.armSystem();
+        void this.armSystem();
       } else {
         this.disarmSystem();
       }
@@ -139,122 +418,206 @@ class SorterApp {
     this.btnArmStageEl.addEventListener('click', toggleArmHandler);
     this.btnToggleArmEl.addEventListener('click', toggleArmHandler);
 
-    // Flip camera
     this.btnFlipCamEl.addEventListener('click', async () => {
-      this.currentFacingMode = this.currentFacingMode === 'environment' ? 'user' : 'environment';
-      this.logDiagnostic('CAMERA', `Switched camera facing mode to: ${this.currentFacingMode}`);
+      if (!this.adminAuthenticated) return;
+
+      this.currentFacingMode =
+        this.currentFacingMode === 'environment' ? 'user' : 'environment';
+
+      this.logDiagnostic('CAMERA', `Switched camera to ${this.currentFacingMode}.`);
+
       if (this.state !== 'DISARMED') {
-        await this.startCamera();
+        try {
+          await this.startCamera();
+        } catch (error) {
+          this.logDiagnostic('CAMERA ERROR', String(error));
+          alert('Unable to switch camera.');
+        }
       }
     });
 
-    // Sound toggle
     this.btnToggleSoundEl.addEventListener('click', () => {
       this.audioEnabled = !this.audioEnabled;
       soundEffects.setEnabled(this.audioEnabled);
       this.btnToggleSoundEl.style.opacity = this.audioEnabled ? '1' : '0.4';
-      this.logDiagnostic('AUDIO', `Sound effects ${this.audioEnabled ? 'enabled' : 'muted'}`);
+      this.logDiagnostic('AUDIO', `Sound ${this.audioEnabled ? 'enabled' : 'muted'}.`);
     });
 
-    // Tap RTDB indicator to manually toggle object_detected signal for easy testing
     this.pillRtdbEl.style.cursor = 'pointer';
-    this.pillRtdbEl.title = 'Click to toggle object_detected signal ON/OFF';
+    this.pillRtdbEl.title = 'Toggle object_detected signal for testing';
     this.pillRtdbEl.addEventListener('click', async () => {
-      const current = firebaseService.getTriggerState();
-      const next = !current;
-      this.logDiagnostic('RTDB MANUAL', `Toggling RTDB "${APP_CONFIG.rtdbTriggerPath}" to: ${next}`);
+      if (!this.adminAuthenticated) return;
+
+      const next = !firebaseService.getTriggerState();
+      this.logDiagnostic(
+        'RTDB MANUAL',
+        `Setting ${APP_CONFIG.rtdbTriggerPath} to ${next}.`
+      );
       await firebaseService.setTriggerValue(next);
     });
 
-    // Reset bottle counter button (accessible when scrolled down and disarmed)
     this.btnResetCounterEl.addEventListener('click', async () => {
+      if (!this.adminAuthenticated) return;
+
       if (this.state !== 'DISARMED') {
         alert('Please disarm the sorter system before resetting the counter.');
         return;
       }
-      if (confirm('Are you sure you want to reset the Firestore bottles_count to zero?')) {
-        this.btnResetCounterEl.disabled = true;
-        this.btnResetCounterEl.innerText = 'Resetting...';
-        this.logDiagnostic('FIRESTORE', 'Resetting bottles_count to 0...');
+
+      if (!confirm('Are you sure you want to reset the bottle count to zero?')) {
+        return;
+      }
+
+      this.btnResetCounterEl.disabled = true;
+      this.btnResetCounterEl.innerText = 'Resetting...';
+
+      try {
         await firebaseService.resetBottleCount();
         this.totalBottlesDetected = 0;
-        this.statTotalBottlesEl.innerText = '0';
-        this.resetSectionCountEl.innerText = '0';
+        this.updateBottleCountDisplays(0);
+        this.logDiagnostic('FIRESTORE', 'Bottle count reset requested.');
+      } catch (error) {
+        this.logDiagnostic('FIRESTORE ERROR', String(error));
+        alert('Could not reset the bottle counter. Check the console.');
+      } finally {
         this.btnResetCounterEl.disabled = false;
         this.btnResetCounterEl.innerText = 'Reset Bottle Count to Zero';
-        this.logDiagnostic('FIRESTORE', 'Bottle count successfully reset to 0');
       }
     });
 
-    // Wake lock status changes
+    // Manual override controls
+    this.manualToggleEl.addEventListener('change', () => {
+      if (!this.adminAuthenticated) {
+        this.manualToggleEl.checked = this.manualOverride;
+        return;
+      }
+      void this.setManualOverride(this.manualToggleEl.checked);
+    });
+
+    this.btnSendServoEl.addEventListener('click', () => {
+      void this.sendServoCommand();
+    });
+
+    this.btnManualCaptureEl.addEventListener('click', () => {
+      void this.manualCaptureAndAnalyze();
+    });
+
     wakeLockManager.onStatusChange((active) => {
       this.pillWakeLockEl.innerText = active ? 'ON' : 'OFF';
       this.pillWakeLockEl.style.color = active ? '#059669' : '#64748b';
-      this.logDiagnostic('WAKELOCK', `Screen wake lock is now: ${active ? 'ACTIVE' : 'RELEASED'}`);
+      this.logDiagnostic(
+        'WAKELOCK',
+        `Screen wake lock ${active ? 'active' : 'released'}.`
+      );
     });
+  }
+
+  private showScreen(screen: 'public' | 'login' | 'admin') {
+    this.publicScreenEl.classList.toggle('hidden', screen !== 'public');
+    this.adminLoginScreenEl.classList.toggle('hidden', screen !== 'login');
+    this.adminScreenEl.classList.toggle('hidden', screen !== 'admin');
+
+    if (screen !== 'admin' && this.state !== 'DISARMED') {
+      this.disarmSystem();
+    }
+
+    // Leaving the admin screen turns manual override OFF
+    if (screen !== 'admin' && this.manualOverride) {
+      void this.setManualOverride(false);
+    }
+  }
+
+  private updateBottleCountDisplays(count: number) {
+    this.statTotalBottlesEl.innerText = String(count);
+    this.adminStatTotalBottlesEl.innerText = String(count);
+    this.resetSectionCountEl.innerText = String(count);
+  }
+
+  private updatePublicStatus() {
+    const signalOn = firebaseService.getTriggerState();
+
+    // This reflects the RTDB trigger, not a separate hardware-health heartbeat.
+    this.publicStatusEl.innerText = signalOn ? 'Live' : 'Ready';
+    this.publicStatusTextEl.innerText = signalOn ? 'LIVE' : 'READY';
+    this.publicStatusTextEl.className = signalOn
+      ? 'status-connected'
+      : 'status-waiting';
+  }
+
+  private showThankYou() {
+    this.publicThankYouEl.classList.remove('hidden');
+
+    if (this.thankYouTimer) clearTimeout(this.thankYouTimer);
+
+    this.thankYouTimer = setTimeout(() => {
+      this.publicThankYouEl.classList.add('hidden');
+      this.thankYouTimer = null;
+    }, THANK_YOU_DURATION_MS);
   }
 
   private initFirebase() {
     const initResult = firebaseService.initialize();
     this.logDiagnostic('FIREBASE', initResult.message);
 
-    // RTDB Trigger listener for object_detected
     firebaseService.onTriggerChange((triggered) => {
       this.handleRtdbTriggerChange(triggered);
+      this.updatePublicStatus();
     });
 
-    // Real-time bottle count listener from Firestore
     firebaseService.listenToBottleCount((count) => {
       this.totalBottlesDetected = count;
-      this.statTotalBottlesEl.innerText = `${count}`;
-      this.resetSectionCountEl.innerText = `${count}`;
-      this.logDiagnostic('FIRESTORE', `Live sync: bottles_count is now ${count}`);
+      this.updateBottleCountDisplays(count);
+      this.logDiagnostic('FIRESTORE', `Bottle count updated to ${count}.`);
     });
 
     this.updateRtdbIndicator();
+    this.updatePublicStatus();
   }
 
   private updateRtdbIndicator() {
-    const isTriggered = firebaseService.getTriggerState();
-    if (isTriggered) {
-      this.pillRtdbEl.innerText = 'Signal: ON';
-      this.pillRtdbEl.className = 'tel-val status-connected';
-    } else {
-      this.pillRtdbEl.innerText = 'Signal: OFF';
-      this.pillRtdbEl.className = 'tel-val status-waiting';
-    }
+    const triggered = firebaseService.getTriggerState();
+
+    this.pillRtdbEl.innerText = triggered ? 'Signal: ON' : 'Signal: OFF';
+    this.pillRtdbEl.className = triggered
+      ? 'tel-val status-connected'
+      : 'tel-val status-waiting';
   }
 
-  // Transitions state when RTDB object_detected attribute changes
   private async handleRtdbTriggerChange(triggered: boolean) {
     this.updateRtdbIndicator();
+
+    if (this.manualOverride) {
+      this.logDiagnostic(
+        'RTDB',
+        `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}); manual override is ON, ignored.`
+      );
+      return;
+    }
 
     if (this.state === 'DISARMED') {
       this.logDiagnostic(
         'RTDB',
-        `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}), awaiting system arming.`
+        `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}); system is disarmed.`
       );
       return;
     }
 
     if (triggered) {
       this.hasDetectedForCurrentTrigger = false;
+      this.writeBottleVerified('pending');
       this.logDiagnostic(
         'RTDB TRIGGER',
-        `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Capturing photo for Gemini REST API analysis...`
+        'Signal ON. Capturing image for Gemini analysis.'
       );
+
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
-
-      // Execute photo capture and Gemini REST check workflow
       await this.captureAndAnalyzePhotoWorkflow();
     } else {
       this.hasDetectedForCurrentTrigger = false;
-      this.logDiagnostic(
-        'RTDB TRIGGER',
-        `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Ready for next object.`
-      );
+      this.logDiagnostic('RTDB TRIGGER', 'Signal OFF. Ready for next object.');
+
       this.state = 'STANDBY';
       this.hudRenderer.clear();
       this.updateUIForState('STANDBY');
@@ -266,20 +629,14 @@ class SorterApp {
     }
   }
 
-  /**
-   * Main workflow: captures a photo from the camera and queries Gemini REST API to verify if it's a bottle
-   */
   private async captureAndAnalyzePhotoWorkflow() {
-    if (this.state === 'DISARMED' || !firebaseService.getTriggerState()) {
-      return;
-    }
+    if (this.state === 'DISARMED' || !firebaseService.getTriggerState()) return;
 
     if (geminiVision.isBusy()) {
-      this.logDiagnostic('GEMINI REST', 'Previous analysis still in progress, waiting...');
+      this.logDiagnostic('GEMINI REST', 'Previous analysis is still in progress.');
       return;
     }
 
-    // Indicate scanning state on UI
     this.tickerClassNameEl.innerText = 'Capturing & Analyzing Photo...';
     this.tickerScoreEl.innerText = '--';
     this.tickerBarFillEl.style.width = '50%';
@@ -287,24 +644,25 @@ class SorterApp {
     this.tickerDotEl.className = 'ticker-dot';
     this.statLivePredictionEl.innerText = 'Analyzing...';
     this.statLivePredictionEl.style.color = '#38bdf8';
-    this.tickerLogMsgEl.innerText = `[Workflow] Capturing photo for Gemini (${APP_CONFIG.geminiModel})...`;
+    this.tickerLogMsgEl.innerText =
+      `[Workflow] Capturing photo for Gemini (${APP_CONFIG.geminiModel})...`;
 
-    // Wait a brief 250ms for the physical object to settle in front of the lens
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((resolve) => setTimeout(resolve, 250));
 
-    // Re-verify still armed and trigger is still true
-    if ((this.state as SorterState) === 'DISARMED' || !firebaseService.getTriggerState()) {
-      this.logDiagnostic('WORKFLOW', 'Trigger cleared before photo analysis, cancelled.');
+    if (!firebaseService.getTriggerState()) {
+      this.logDiagnostic('WORKFLOW', 'Trigger cleared before analysis; cancelled.');
       return;
     }
 
     try {
       const result = await geminiVision.analyzePhoto(this.videoEl);
-      this.statModelLatencyEl.innerText = `${result.inferenceMs}`;
+      this.statModelLatencyEl.innerText = String(result.inferenceMs);
       const scorePct = Math.round(result.confidence * 100);
 
-      if (result.isPlasticBottle && result.confidence >= APP_CONFIG.confidenceThreshold) {
-        // PLASTIC BOTTLE CONFIRMED!
+      if (
+        result.isPlasticBottle &&
+        result.confidence >= APP_CONFIG.confidenceThreshold
+      ) {
         this.hasDetectedForCurrentTrigger = true;
         this.lastBottleResult = result;
         this.lastBottleResultAt = performance.now();
@@ -316,11 +674,12 @@ class SorterApp {
         this.tickerBarFillEl.style.width = `${scorePct}%`;
         this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
         this.tickerDotEl.className = 'ticker-dot active-plastic';
-        this.tickerLogMsgEl.innerText = `[Gemini REST] Bottle verified (${scorePct}%): ${result.reason}`;
+        this.tickerLogMsgEl.innerText =
+          `[Gemini REST] Bottle verified (${scorePct}%): ${result.reason}`;
 
+        this.writeBottleVerified('yes');
         this.onBottleIdentified(result);
       } else {
-        // NOT A PLASTIC BOTTLE
         this.statLivePredictionEl.innerText = 'No Bottle';
         this.statLivePredictionEl.style.color = '#0284c7';
         this.tickerClassNameEl.innerText = result.isPlasticBottle
@@ -330,72 +689,70 @@ class SorterApp {
         this.tickerBarFillEl.style.width = '0%';
         this.tickerBarFillEl.className = 'ticker-bar-fill other';
         this.tickerDotEl.className = 'ticker-dot active-other';
-        this.tickerLogMsgEl.innerText = `[Gemini REST] ${result.reason} (${result.inferenceMs}ms)`;
+        this.tickerLogMsgEl.innerText =
+          `[Gemini REST] ${result.reason} (${result.inferenceMs}ms)`;
+
+        this.writeBottleVerified('no');
+
         this.logDiagnostic(
           'GEMINI REST',
-          `❌ Object is NOT a bottle (${scorePct}% confidence). Reason: "${result.reason}"`
+          `Object rejected (${scorePct}% confidence): ${result.reason}`
         );
       }
-    } catch (err: any) {
-      this.logDiagnostic('GEMINI ERROR', `Photo analysis failed: ${err.message || err}`);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logDiagnostic('GEMINI ERROR', `Photo analysis failed: ${message}`);
       this.statLivePredictionEl.innerText = 'API Error';
       this.statLivePredictionEl.style.color = '#ef4444';
       this.tickerClassNameEl.innerText = 'Analysis Failed';
-      this.tickerLogMsgEl.innerText = `[Error] ${err.message || err}`;
+      this.tickerLogMsgEl.innerText = `[Error] ${message}`;
     }
   }
 
-  // Arm the system (requests camera, wake lock, checks Gemini API key)
   public async armSystem() {
+    if (!this.adminAuthenticated) {
+      alert('Please log in as administrator first.');
+      return;
+    }
+
     if (!geminiVision.hasApiKey()) {
-      this.logDiagnostic(
-        'GEMINI ERROR',
-        'Gemini API key is missing. Please add your key to GEMINI_API_KEY in src/config.ts or .env'
-      );
-      alert('Please set your Gemini API key in src/config.ts or .env before arming.');
+      this.logDiagnostic('GEMINI ERROR', 'Gemini API key is missing.');
+      alert('Please configure your Gemini API key in .env.');
       return;
     }
 
     this.btnArmStageEl.disabled = true;
-    this.logDiagnostic('SYSTEM', 'Arming system: starting camera feed...');
+    this.logDiagnostic('SYSTEM', 'Starting camera and arming sorter...');
 
     try {
-      // 1. Acquire Screen Wake Lock
       await wakeLockManager.requestLock();
-
-      // 2. Start Camera
       await this.startCamera();
-
       soundEffects.playArmedChime();
 
-      // Check if RTDB trigger is already true
-      if (firebaseService.getTriggerState()) {
+      if (firebaseService.getTriggerState() && !this.manualOverride) {
         this.state = 'SCANNING';
         this.updateUIForState('SCANNING');
-        this.logDiagnostic('SYSTEM', 'System ARMED & active (RTDB signal already ON)');
-        // Trigger workflow immediately
-        this.captureAndAnalyzePhotoWorkflow();
+        this.logDiagnostic('SYSTEM', 'System armed; trigger is already ON.');
+        void this.captureAndAnalyzePhotoWorkflow();
       } else {
-        // Armed, but signal hasn't arrived: show Standby shutter screen
         this.state = 'STANDBY';
         this.updateUIForState('STANDBY');
-        this.logDiagnostic('SYSTEM', 'System ARMED in STANDBY. Waiting for RTDB object_detected = true');
+        this.logDiagnostic('SYSTEM', 'System armed in standby.');
       }
 
       this.updateRtdbIndicator();
-
-      // Start continuous HUD rendering loop
+      this.updatePublicStatus();
       this.startFramePipeline();
-    } catch (err: any) {
-      this.logDiagnostic('ERROR', `Failed to arm system: ${err.message || err}`);
-      alert('Camera access denied or hardware error: ' + (err.message || err));
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logDiagnostic('ERROR', `Failed to arm: ${message}`);
+      alert(`Camera access failed: ${message}`);
       this.disarmSystem();
     } finally {
       this.btnArmStageEl.disabled = false;
     }
   }
 
-  // Disarms camera and releases resources
   public disarmSystem() {
     this.state = 'DISARMED';
     this.lastBottleResult = null;
@@ -403,13 +760,14 @@ class SorterApp {
     wakeLockManager.releaseLock();
 
     if (this.currentStream) {
-      this.currentStream.getTracks().forEach((t) => t.stop());
+      this.currentStream.getTracks().forEach((track) => track.stop());
       this.currentStream = null;
     }
+
     this.videoEl.srcObject = null;
     this.hudRenderer.clear();
 
-    if (this.animationFrameId) {
+    if (this.animationFrameId !== null) {
       cancelAnimationFrame(this.animationFrameId);
       this.animationFrameId = null;
     }
@@ -423,12 +781,14 @@ class SorterApp {
     this.tickerDotEl.className = 'ticker-dot';
 
     this.updateUIForState('DISARMED');
-    this.logDiagnostic('SYSTEM', 'System DISARMED. Camera stopped.');
+    this.updatePublicStatus();
+    this.logDiagnostic('SYSTEM', 'System disarmed; camera stopped.');
   }
 
   private async startCamera() {
     if (this.currentStream) {
-      this.currentStream.getTracks().forEach((t) => t.stop());
+      this.currentStream.getTracks().forEach((track) => track.stop());
+      this.currentStream = null;
     }
 
     const constraints: MediaStreamConstraints = {
@@ -450,12 +810,16 @@ class SorterApp {
       this.hudRenderer.syncSize(this.videoEl);
     };
 
-    this.logDiagnostic('CAMERA', `Camera stream running (${this.currentFacingMode})`);
+    this.logDiagnostic('CAMERA', `Camera running (${this.currentFacingMode}).`);
   }
 
-  // Continuous HUD rendering pipeline
   private startFramePipeline() {
     const loop = (timestamp: number) => {
+      if (this.state === 'DISARMED') {
+        this.animationFrameId = null;
+        return;
+      }
+
       this.calculateFps(timestamp);
 
       if (this.videoEl.videoWidth > 0) {
@@ -466,44 +830,45 @@ class SorterApp {
         this.hudRenderer.clear();
         this.hudRenderer.drawScanningGuide(!this.hasDetectedForCurrentTrigger);
 
-        // Keep the detection banner visible for a few seconds after a bottle is confirmed
-        const showBanner = this.lastBottleResult && performance.now() - this.lastBottleResultAt < 3500;
-        this.hudRenderer.renderGeminiVisionHUD(showBanner ? this.lastBottleResult : null);
+        const showBanner =
+          this.lastBottleResult &&
+          performance.now() - this.lastBottleResultAt < 3500;
+
+        this.hudRenderer.renderGeminiVisionHUD(
+          showBanner ? this.lastBottleResult : null
+        );
       }
 
       this.animationFrameId = requestAnimationFrame(loop);
     };
 
-    this.animationFrameId = requestAnimationFrame(loop);
+    if (this.animationFrameId === null) {
+      this.animationFrameId = requestAnimationFrame(loop);
+    }
   }
 
-  // Triggered when plastic bottle is verified by Gemini REST API
   private onBottleIdentified(result: GeminiVisionResult) {
     const now = performance.now();
     const timeSinceLast = now - this.lastDetectionTime;
     const scorePct = Math.round(result.confidence * 100);
 
-    // Check debounce / cooldown window
     if (timeSinceLast < APP_CONFIG.cooldownMs) {
       const remainingMs = Math.round(APP_CONFIG.cooldownMs - timeSinceLast);
       console.warn(
-        `⏳ [COOLDOWN ACTIVE] Bottle verified (${scorePct}%), but cooldown has ${remainingMs}ms left.`
+        `Bottle detected, but cooldown has ${remainingMs}ms remaining.`
       );
       return;
     }
 
     this.lastDetectionTime = now;
 
-    // Verbose log for successful detection
     this.logDiagnostic(
       'GEMINI DETECTION',
-      `🍾 PLASTIC BOTTLE CONFIRMED! (${scorePct}%) Reason: "${result.reason}" | Latency: ${result.inferenceMs}ms -> Dispatching Firestore increment (+1)...`
+      `Plastic bottle confirmed (${scorePct}%). Recording bottle count.`
     );
 
-    // Audio chime
     soundEffects.playDetectionChime();
 
-    // Confetti burst
     confetti({
       particleCount: 24,
       spread: 60,
@@ -511,10 +876,12 @@ class SorterApp {
       colors: ['#059669', '#10b981', '#38bdf8']
     });
 
-    // Non-blocking Firestore update: increments bottles_count by 1
-    firebaseService.recordBottleDetection(result);
+    // Update Firestore using the existing service.
+    void firebaseService.recordBottleDetection(result);
 
-    // Briefly pulse status badge to DETECTED
+    // Display public thank-you message after a confirmed bottle.
+    this.showThankYou();
+
     this.state = 'DETECTED';
     this.updateUIForState('DETECTED');
 
@@ -529,46 +896,42 @@ class SorterApp {
   private calculateFps(timestamp: number) {
     this.frameCount++;
     const delta = timestamp - this.lastFpsCalcTime;
+
     if (delta >= 1000) {
-      this.currentFps = Math.round((this.frameCount * 1000) / delta);
-      this.statStreamFpsEl.innerText = `${this.currentFps}`;
+      this.statStreamFpsEl.innerText =
+        String(Math.round((this.frameCount * 1000) / delta));
       this.frameCount = 0;
       this.lastFpsCalcTime = timestamp;
     }
   }
 
-  // Updates UI state, overlays, and scroll permissions
-  private updateUIForState(st: SorterState) {
-    this.stateBadgeEl.className = 'state-badge ' + st.toLowerCase();
-    this.stateTextEl.innerText = st;
+  private updateUIForState(state: SorterState) {
+    this.stateBadgeEl.className = 'state-badge ' + state.toLowerCase();
+    this.stateTextEl.innerText = state;
 
-    if (st === 'DISARMED') {
+    if (state === 'DISARMED') {
       this.scrollableContainerEl.classList.remove('locked');
       this.adminResetSectionEl.classList.remove('hidden-when-armed');
-
       this.stageOverlayEl.classList.remove('hidden');
       this.overlayDisarmedContentEl.classList.remove('hidden');
       this.overlayStandbyContentEl.classList.add('hidden');
 
       this.btnToggleArmLabel.innerText = 'Arm System';
       this.btnToggleArmEl.className = 'btn btn-primary btn-pill';
-    } else if (st === 'STANDBY') {
+    } else if (state === 'STANDBY') {
       this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
       this.scrollableContainerEl.classList.add('locked');
       this.adminResetSectionEl.classList.add('hidden-when-armed');
-
       this.stageOverlayEl.classList.remove('hidden');
       this.overlayDisarmedContentEl.classList.add('hidden');
       this.overlayStandbyContentEl.classList.remove('hidden');
 
       this.btnToggleArmLabel.innerText = 'Disarm';
       this.btnToggleArmEl.className = 'btn btn-danger btn-pill';
-    } else if (st === 'SCANNING' || st === 'DETECTED') {
+    } else if (state === 'SCANNING' || state === 'DETECTED') {
       this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
       this.scrollableContainerEl.classList.add('locked');
       this.adminResetSectionEl.classList.add('hidden-when-armed');
-
-      // SIGNAL IS HERE: Camera feed revealed!
       this.stageOverlayEl.classList.add('hidden');
 
       this.btnToggleArmLabel.innerText = 'Disarm';
@@ -581,8 +944,12 @@ class SorterApp {
       window.addEventListener('load', () => {
         navigator.serviceWorker
           .register('/sw.js')
-          .then((reg) => console.log('Service Worker registered with scope:', reg.scope))
-          .catch((err) => console.warn('Service Worker registration skipped/failed:', err));
+          .then((registration) => {
+            console.log('Service Worker registered:', registration.scope);
+          })
+          .catch((error) => {
+            console.warn('Service Worker registration failed:', error);
+          });
       });
     }
   }

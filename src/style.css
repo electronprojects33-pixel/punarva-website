@@ -76,6 +76,13 @@ html, body {
   justify-content: space-between;
 }
 
+/* Compact admin icon button in the top bar */
+.topbar-row .btn-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
 .brand-group {
   display: flex;
   align-items: center;
@@ -632,3 +639,304 @@ html, body {
   100% { transform: scale(1.6); opacity: 0; }
 }
 
+
+/* Shared visibility utility for the public and protected admin screens */
+.hidden {
+  display: none !important;
+}
+
+/* Public bottle collection screen */
+#public-screen {
+  height: auto;
+  flex: 1;
+  background: var(--bg-page);
+  padding: 1.25rem;
+}
+
+#public-screen .camera-viewport-wrap {
+  min-height: min(680px, calc(100dvh - 120px));
+  height: auto;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 2rem 1.25rem;
+  border: 1px solid var(--border-light);
+  border-radius: 24px;
+  background: linear-gradient(160deg, #ffffff 0%, #f0fdf4 100%);
+  color: var(--text-main);
+  box-shadow: var(--shadow-card);
+}
+
+#public-screen .overlay-content-block {
+  max-width: 520px;
+  margin: auto;
+}
+
+#public-screen .overlay-icon-wrap {
+  width: 76px;
+  height: 76px;
+  border-radius: 22px;
+  background: var(--color-emerald-light);
+}
+
+#public-screen .overlay-icon {
+  width: 38px;
+  height: 38px;
+  stroke: var(--color-emerald);
+}
+
+#public-screen .overlay-title {
+  font-size: clamp(1.6rem, 5vw, 2.3rem);
+  text-align: center;
+}
+
+#public-screen .overlay-sub {
+  max-width: 420px;
+  text-align: center;
+  line-height: 1.7;
+}
+
+#public-screen .reset-card {
+  align-items: center;
+  text-align: center;
+  margin: 0.5rem 0 1rem;
+  padding: 1.5rem;
+  background: #ffffff;
+  border-color: var(--color-emerald-border);
+}
+
+#public-screen #stat-total-bottles {
+  display: block;
+  color: var(--color-emerald);
+  font-size: clamp(2.5rem, 10vw, 4rem);
+  line-height: 1.1;
+}
+
+#public-live-status {
+  font-weight: 800;
+  color: var(--color-emerald);
+}
+
+#public-system-status-text.status-connected {
+  color: var(--color-emerald);
+}
+
+#public-system-status-text.status-waiting {
+  color: var(--color-amber);
+}
+
+#public-thank-you {
+  width: 100%;
+  padding: 1rem;
+  margin: 0.5rem 0 1rem;
+  border: 1px solid var(--color-emerald-border);
+  border-radius: 16px;
+  background: var(--color-emerald-light);
+  text-align: center;
+}
+
+#public-thank-you .overlay-title {
+  color: var(--color-emerald);
+}
+
+/* Admin login */
+#admin-login-screen {
+  flex: 1;
+  padding: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  background:
+    radial-gradient(circle at top right, #e0f2fe 0, transparent 40%),
+    var(--bg-page);
+}
+
+#admin-login-screen .reset-card {
+  max-width: 420px;
+  margin: auto;
+  padding: clamp(1.25rem, 5vw, 2rem);
+}
+
+#admin-login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+  margin-bottom: 0.75rem;
+}
+
+#admin-login-form label {
+  color: var(--text-main);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+#admin-password {
+  width: 100%;
+  min-height: 46px;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text-main);
+  font: inherit;
+  outline: none;
+}
+
+#admin-password:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.12);
+}
+
+#admin-login-error {
+  color: var(--color-rose);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* Admin camera screen */
+#admin-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+#admin-screen .mobile-topbar {
+  gap: 0.5rem;
+}
+
+#admin-screen .scrollable-container {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+#admin-screen .camera-viewport-wrap {
+  height: min(72dvh, 760px);
+  min-height: 360px;
+}
+
+#admin-screen .telemetry-strip {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  gap: 0.4rem 0.75rem;
+}
+
+#admin-screen .state-badge {
+  align-self: flex-start;
+}
+
+#admin-screen .admin-reset-section {
+  padding-bottom: 2rem;
+}
+
+/* Manual override card (admin only) */
+#manual-override-section {
+  padding-bottom: 4rem;
+}
+
+#manual-override-section .reset-card h3 {
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+#manual-override-status {
+  font-family: var(--font-mono);
+  color: var(--color-amber);
+}
+
+.manual-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--text-main);
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  user-select: none;
+}
+
+.manual-toggle-row input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  accent-color: var(--color-emerald);
+  cursor: pointer;
+}
+
+.manual-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.manual-controls label {
+  color: var(--text-main);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+#manual-servo-angle {
+  width: 100%;
+  min-height: 46px;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: #fff;
+  color: var(--text-main);
+  font: inherit;
+  outline: none;
+}
+
+#manual-servo-angle:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(2, 132, 199, 0.12);
+}
+
+#manual-result {
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border-light);
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  word-break: break-word;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 480px) {
+  #public-screen {
+    padding: 0.75rem;
+  }
+
+  #public-screen .camera-viewport-wrap {
+    min-height: calc(100dvh - 105px);
+    padding: 1.25rem 0.85rem;
+    border-radius: 18px;
+  }
+
+  #admin-screen .camera-viewport-wrap {
+    height: 62dvh;
+    min-height: 320px;
+  }
+
+  #admin-screen .telemetry-strip {
+    gap: 0.3rem 0.55rem;
+  }
+
+  #admin-screen .tel-item {
+    font-size: 0.65rem;
+  }
+}

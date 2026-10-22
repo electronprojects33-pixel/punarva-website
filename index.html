@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <title>AeroSort AI - Mobile Sorter</title>
-    <meta name="description" content="Mobile-first edge TFLite plastic bottle sorter PWA with Firebase Realtime sync." />
-    
+    <title>Punarva - Bottle Collection</title>
+    <meta name="description" content="Punarva smart plastic bottle collection system." />
+
     <!-- PWA Setup -->
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#ffffff" />
@@ -16,175 +16,248 @@
     <link rel="apple-touch-icon" href="/icon.svg" />
 
     <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
+
   <body>
     <div class="mobile-app-shell">
-      <!-- Minimalist Top Bar: Header & Telemetry -->
+      <!-- PUBLIC COLLECTION SCREEN -->
       <header class="mobile-topbar">
         <div class="topbar-row">
           <div class="brand-group">
-            <img src="/icon.svg" alt="AeroSort Logo" class="brand-icon" />
-            <span class="brand-name">AeroSort</span>
+            <img src="/icon.svg" alt="Punarva Logo" class="brand-icon" />
+            <span class="brand-name">Punarva</span>
           </div>
 
-          <!-- Live State Badge -->
-          <div id="system-state-badge" class="state-badge disarmed">
-            <span class="state-dot"></span>
-            <span id="system-state-text">DISARMED</span>
-          </div>
-        </div>
+          <div style="display:flex;align-items:center;gap:0.5rem;">
+            <div id="public-system-status" class="state-badge disarmed">
+              <span class="state-dot"></span>
+              <span id="public-system-status-text">Connecting...</span>
+            </div>
 
-        <!-- Compact Telemetry Strip -->
-        <div class="telemetry-strip">
-          <div class="tel-item highlight-emerald">
-            <span class="tel-label">Bottles</span>
-            <span id="stat-total-bottles" class="tel-val">0</span>
-          </div>
-          <div class="tel-item highlight-prediction">
-            <span class="tel-label">AI</span>
-            <span id="stat-live-prediction" class="tel-val">--</span>
-          </div>
-          <div class="tel-item">
-            <span class="tel-label">Latency</span>
-            <span class="tel-val"><span id="stat-model-latency">0</span>ms</span>
-          </div>
-          <div class="tel-item">
-            <span class="tel-label">FPS</span>
-            <span id="stat-stream-fps" class="tel-val">0</span>
-          </div>
-          <div class="tel-item">
-            <span class="tel-label">RTDB</span>
-            <span id="pill-rtdb" class="tel-val status-waiting">WAITING</span>
-          </div>
-          <div class="tel-item">
-            <span class="tel-label">Lock</span>
-            <span id="pill-wakelock" class="tel-val">OFF</span>
+            <button id="btn-open-admin" class="btn-icon" type="button" title="Admin" aria-label="Admin">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 2l8 3v6c0 5-3.5 9-8 11-4.5-2-8-6-8-11V5l8-3z" />
+                <circle cx="12" cy="10" r="2.5" />
+                <path d="M7.5 16c1-2 2.8-3 4.5-3s3.5 1 4.5 3" />
+              </svg>
+            </button>
           </div>
         </div>
       </header>
 
-      <!-- Scrollable Main Container -->
-      <div id="scrollable-container" class="scrollable-container">
-        <!-- Full-Height Camera Viewport Area -->
-        <main class="camera-viewport-wrap">
-          <video id="camera-video" playsinline muted autoplay></video>
-          <canvas id="hud-canvas"></canvas>
-
-          <!-- Live On-Screen AI Detection Diagnostic Ticker -->
-          <div id="ai-live-ticker" class="ai-live-ticker">
-            <div class="ticker-top">
-              <div class="ticker-class-wrap">
-                <span id="ticker-dot" class="ticker-dot"></span>
-                <span id="ticker-class-name">Awaiting Object</span>
-              </div>
-              <span id="ticker-score" class="ticker-score">--</span>
-            </div>
-            <div class="ticker-bar-wrap">
-              <div id="ticker-bar-fill" class="ticker-bar-fill"></div>
-            </div>
-            <div id="ticker-log-msg" class="ticker-log-msg">Ready. Tap 'Arm System' to begin detection.</div>
-          </div>
-
-          <!-- Dynamic Camera Stage Overlay (Disarmed & Standby Screens) -->
-          <div id="stage-overlay" class="stage-overlay">
-            <!-- Disarmed State Content -->
-            <div id="overlay-disarmed-content" class="overlay-content-block">
-              <div class="overlay-icon-wrap">
-                <svg class="overlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-                  <circle cx="12" cy="13" r="4"/>
-                </svg>
-              </div>
-              <h2 class="overlay-title">Camera System Disarmed</h2>
-              <p class="overlay-sub">
-                Tap "Arm System" below to prepare the camera and connect to Firebase.
-              </p>
-              <button id="btn-arm-stage" class="btn btn-primary btn-large">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                  <polygon points="5 3 19 12 5 21 5 3"/>
-                </svg>
-                Arm Sorter System
-              </button>
-            </div>
-
-            <!-- Standby State Content (Camera is visually asleep until RTDB signal arrives) -->
-            <div id="overlay-standby-content" class="overlay-content-block hidden">
-              <div class="standby-radar-wrap">
-                <div class="radar-pulse-ring"></div>
-                <div class="radar-pulse-ring delay"></div>
-                <div class="standby-icon-core">
-                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="12" cy="12" r="10"/>
-                    <line x1="12" y1="8" x2="12" y2="12"/>
-                    <line x1="12" y1="16" x2="12.01" y2="16"/>
-                  </svg>
-                </div>
-              </div>
-              <h2 class="overlay-title">Standby: Awaiting Object</h2>
-              <p class="overlay-sub">
-                Camera feed will automatically activate when <code>object_detected</code> signal turns <code>true</code>.
-              </p>
-              <div class="standby-chip">
-                <span class="dot-amber"></span>
-                <span>Signal: object_detected == false</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Floating Bottom Quick Action Controls -->
-          <div class="floating-controls-bar">
-            <button id="btn-flip-camera" class="btn-icon" title="Flip Camera">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.052.776 3.923 2.053 5.343L4 20h4.657"/>
-                <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.052-.776-3.923-2.053-5.343L20 4h-4.657"/>
+      <main id="public-screen" class="scrollable-container">
+        <section class="camera-viewport-wrap">
+          <div class="overlay-content-block">
+            <div class="overlay-icon-wrap">
+              <svg class="overlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 7h16v13H4z" />
+                <path d="M8 7l2-3h4l2 3" />
+                <path d="M8 13h8M12 9v8" />
               </svg>
-            </button>
-
-            <button id="btn-toggle-arm" class="btn btn-primary btn-pill">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-              </svg>
-              <span id="btn-toggle-arm-label">Arm System</span>
-            </button>
-
-            <button id="btn-toggle-sound" class="btn-icon" title="Toggle Sound">
-              <svg id="icon-sound-on" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
-              </svg>
-            </button>
-          </div>
-        </main>
-
-        <!-- Admin / Reset Section (Visible only when scrolled down and system is disarmed) -->
-        <section id="admin-reset-section" class="admin-reset-section">
-          <div class="reset-card">
-            <div class="reset-card-header">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
-                <circle cx="12" cy="12" r="3"/>
-              </svg>
-              <h3>Counter Maintenance</h3>
             </div>
-            <p class="reset-desc">
-              Current total bottle count stored in Firestore: <strong id="reset-section-count">0</strong> bottles.
+
+            <h1 class="overlay-title">Welcome to Punarva</h1>
+            <p class="overlay-sub">
+              Help keep our environment clean. Deposit your plastic bottle into the collection machine.
             </p>
-            <p class="reset-warning">
-              Resetting will set <code>bottles_count</code> to zero in Firestore. This option is only accessible while the system is disarmed.
+
+            <div class="reset-card">
+              <p class="tel-label">TOTAL BOTTLES COLLECTED</p>
+              <h2 id="stat-total-bottles" class="brand-name">0</h2>
+            </div>
+
+            <div id="public-thank-you" class="hidden">
+              <h2 class="overlay-title">Thank you!</h2>
+              <p class="overlay-sub">Your bottle has been accepted. Thank you for helping the environment!</p>
+            </div>
+
+            <p class="overlay-sub">
+              System status: <strong id="public-live-status">Checking connection...</strong>
             </p>
-            <button id="btn-reset-counter" class="btn btn-outline-danger">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
-                <path d="M3 3v5h5"/>
-              </svg>
-              Reset Bottle Count to Zero
-            </button>
           </div>
         </section>
+      </main>
+
+      <!-- ADMIN PASSWORD SCREEN -->
+      <main id="admin-login-screen" class="scrollable-container hidden">
+        <section class="reset-card">
+          <h2 class="overlay-title">Admin Login</h2>
+          <p class="overlay-sub">Enter the administrator password to access the camera and controls.</p>
+
+          <form id="admin-login-form">
+            <label for="admin-password">Password</label>
+            <input
+              id="admin-password"
+              name="password"
+              type="password"
+              autocomplete="current-password"
+              placeholder="Enter admin password"
+              required
+            />
+            <p id="admin-login-error" class="hidden">Incorrect password. Please try again.</p>
+            <button class="btn btn-primary btn-large" type="submit">Unlock Admin</button>
+          </form>
+
+          <button id="btn-cancel-admin" class="btn btn-outline-danger" type="button">
+            Back to Public Screen
+          </button>
+        </section>
+      </main>
+
+      <!-- ADMIN CAMERA / CONTROLS SCREEN -->
+      <div id="admin-screen" class="hidden">
+        <header class="mobile-topbar">
+          <div class="topbar-row">
+            <div class="brand-group">
+              <img src="/icon.svg" alt="Punarva Logo" class="brand-icon" />
+              <span class="brand-name">Punarva Admin</span>
+            </div>
+            <button id="btn-admin-logout" class="btn btn-outline-danger" type="button">
+              Log Out
+            </button>
+          </div>
+
+          <div class="telemetry-strip">
+            <div class="tel-item highlight-emerald">
+              <span class="tel-label">Bottles</span>
+              <span id="admin-stat-total-bottles" class="tel-val">0</span>
+            </div>
+            <div class="tel-item highlight-prediction">
+              <span class="tel-label">AI</span>
+              <span id="stat-live-prediction" class="tel-val">--</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-label">Latency</span>
+              <span class="tel-val"><span id="stat-model-latency">0</span>ms</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-label">FPS</span>
+              <span id="stat-stream-fps" class="tel-val">0</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-label">RTDB</span>
+              <span id="pill-rtdb" class="tel-val status-waiting">WAITING</span>
+            </div>
+            <div class="tel-item">
+              <span class="tel-label">Lock</span>
+              <span id="pill-wakelock" class="tel-val">OFF</span>
+            </div>
+          </div>
+
+          <div id="system-state-badge" class="state-badge disarmed">
+            <span class="state-dot"></span>
+            <span id="system-state-text">DISARMED</span>
+          </div>
+        </header>
+
+        <div id="scrollable-container" class="scrollable-container">
+          <main class="camera-viewport-wrap">
+            <video id="camera-video" playsinline muted autoplay></video>
+            <canvas id="hud-canvas"></canvas>
+
+            <div id="ai-live-ticker" class="ai-live-ticker">
+              <div class="ticker-top">
+                <div class="ticker-class-wrap">
+                  <span id="ticker-dot" class="ticker-dot"></span>
+                  <span id="ticker-class-name">Awaiting Object</span>
+                </div>
+                <span id="ticker-score" class="ticker-score">--</span>
+              </div>
+              <div class="ticker-bar-wrap">
+                <div id="ticker-bar-fill" class="ticker-bar-fill"></div>
+              </div>
+              <div id="ticker-log-msg" class="ticker-log-msg">Ready. Arm the sorter to begin detection.</div>
+            </div>
+
+            <div id="stage-overlay" class="stage-overlay">
+              <div id="overlay-disarmed-content" class="overlay-content-block">
+                <div class="overlay-icon-wrap">
+                  <svg class="overlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                </div>
+                <h2 class="overlay-title">Camera System Disarmed</h2>
+                <p class="overlay-sub">Arm the system to prepare the camera and connect to Firebase.</p>
+                <button id="btn-arm-stage" class="btn btn-primary btn-large" type="button">
+                  Arm Sorter System
+                </button>
+              </div>
+
+              <div id="overlay-standby-content" class="overlay-content-block hidden">
+                <h2 class="overlay-title">Standby: Awaiting Object</h2>
+                <p class="overlay-sub">Camera analysis begins when the object_detected signal turns true.</p>
+              </div>
+            </div>
+
+            <div class="floating-controls-bar">
+              <button id="btn-flip-camera" class="btn-icon" type="button" title="Flip Camera">Flip</button>
+              <button id="btn-toggle-arm" class="btn btn-primary btn-pill" type="button">
+                <span id="btn-toggle-arm-label">Arm System</span>
+              </button>
+              <button id="btn-toggle-sound" class="btn-icon" type="button" title="Toggle Sound">Sound</button>
+            </div>
+          </main>
+
+          <section id="admin-reset-section" class="admin-reset-section">
+            <div class="reset-card">
+              <h3>Counter Maintenance</h3>
+              <p class="reset-desc">
+                Current total bottle count stored in Firestore: <strong id="reset-section-count">0</strong> bottles.
+              </p>
+              <p class="reset-warning">
+                Resetting will set bottles_count to zero in Firestore.
+              </p>
+              <button id="btn-reset-counter" class="btn btn-outline-danger" type="button">
+                Reset Bottle Count to Zero
+              </button>
+            </div>
+          </section>
+
+          <!-- MANUAL OVERRIDE (admin only) -->
+          <section id="manual-override-section" class="admin-reset-section">
+            <div class="reset-card">
+              <h3>Manual Override</h3>
+              <p class="reset-desc">
+                Status: <strong id="manual-override-status">OFF</strong>
+              </p>
+              <p class="reset-warning">
+                When ON, the automatic IR and camera trigger is ignored and you control the servo and camera by hand.
+              </p>
+
+              <label class="manual-toggle-row" for="manual-override-toggle">
+                <input id="manual-override-toggle" type="checkbox" />
+                <span>Enable Manual Override</span>
+              </label>
+
+              <div id="manual-controls" class="manual-controls hidden">
+                <label for="manual-servo-angle">Servo angle (0 to 180)</label>
+                <input
+                  id="manual-servo-angle"
+                  type="number"
+                  min="0"
+                  max="180"
+                  step="1"
+                  value="180"
+                  inputmode="numeric"
+                />
+                <button id="btn-send-servo" class="btn btn-primary btn-large" type="button">
+                  Send Servo Command
+                </button>
+
+                <button id="btn-manual-capture" class="btn btn-primary btn-large" type="button">
+                  Capture &amp; Analyze
+                </button>
+
+                <p id="manual-result" class="reset-warning">No manual capture yet.</p>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
 

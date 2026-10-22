@@ -1,10 +1,8 @@
-// ==============================================================================
-// AEROMODEL & GOOGLE GEMINI CONFIGURATION
-// Add your Gemini API key directly in code below or in your .env file
-// ==============================================================================
 
-// Paste your Google Gemini API Key here (or use .env: VITE_GEMINI_API_KEY)
-export const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE";
+ // AEROSORT AI & GOOGLE GEMINI CONFIGURATION
+
+export const GEMINI_API_KEY =
+  import.meta.env.VITE_GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE";
 
 export const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
@@ -17,20 +15,24 @@ export const FIREBASE_CONFIG = {
 };
 
 export const APP_CONFIG = {
-  // Firebase Realtime Database attribute to watch (true/false)
-  rtdbTriggerPath: import.meta.env.VITE_RTDB_TRIGGER_PATH || "object_detected",
+  // Firebase Realtime Database trigger
+  rtdbTriggerPath:
+    import.meta.env.VITE_RTDB_TRIGGER_PATH || "object_detected",
 
-  // Firestore collection & document to record bottles_count
-  firestoreCollection: import.meta.env.VITE_FIRESTORE_COLLECTION || "bottle_detections",
-  firestoreStatsDoc: "summary", // Document holding bottles_count attribute
+  // Firestore bottle detection records
+  firestoreCollection:
+    import.meta.env.VITE_FIRESTORE_COLLECTION || "bottle_detections",
+  firestoreStatsDoc: "summary",
 
-  // Google Gemini Vision REST API Settings
+  // Gemini Vision API
   geminiApiKey: GEMINI_API_KEY,
-  geminiModel: import.meta.env.VITE_GEMINI_MODEL || "gemini-3.5-flash-lite",
-  confidenceThreshold: 0.70, // 70% minimum confidence
-  cooldownMs: 1500,          // Debounce interval between count updates
+  geminiModel:
+    import.meta.env.VITE_GEMINI_MODEL || "gemini-2.5-flash",
 
-  // Camera Settings
-  cameraFacingMode: "environment" as "environment" | "user", // "environment" for rear camera
-  enableAudio: true          // Synthesized audio chime on detection
+  confidenceThreshold: 0.70,
+  cooldownMs: 1500,
+
+  // Camera
+  cameraFacingMode: "environment" as "environment" | "user",
+  enableAudio: true
 };
