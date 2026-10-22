@@ -1,7 +1,9 @@
 import { FilesetResolver, ImageClassifier } from '@mediapipe/tasks-vision';
-import { ClassificationCategory, ClassificationResult } from '../types';
+import { APP_CONFIG } from '../config';
+import { DetectedBottle, DetectionResult } from '../types';
+import { objectLocalizer } from './localizer';
 
-export class PlasticClassifierService {
+export class TeachableMachineDetectorService {
   private classifier: ImageClassifier | null = null;
   private isInitializing: boolean = false;
   private isInferring: boolean = false;
@@ -11,7 +13,7 @@ export class PlasticClassifierService {
     1: 'Other_Object'
   };
 
-  public async loadLabels(labelsUrl: string = '/models/labels.txt'): Promise<void> {
+  public async loadLabels(labelsUrl: string = APP_CONFIG.labelsUrl): Promise<void> {
     try {
       const response = await fetch(labelsUrl);
       if (response.ok) {
@@ -19,7 +21,6 @@ export class PlasticClassifierService {
         const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
         this.labelsMap = {};
         lines.forEach((line, defaultIndex) => {
-          // Teachable Machine labels are typically "0 Plastic_Bottle" or just "Plastic_Bottle"
           const parts = line.split(/\s+/);
           if (parts.length > 1 && !isNaN(Number(parts[0]))) {
             const idx = Number(parts[0]);
@@ -28,34 +29,19 @@ export class PlasticClassifierService {
             this.labelsMap[defaultIndex] = line.replace(/\s+/g, '_');
           }
         });
-        console.log('Loaded class labels:', this.labelsMap);
+        console.log('Loaded class labels for Teachable Machine:', this.labelsMap);
       }
     } catch (e) {
-      console.warn('Could not fetch labels.txt, using default class map:', e);
+      console.warn('Could not fetch labels.txt, using default map:', e);
     }
   }
 
-  public setLabelsFromText(text: string) {
-    const lines = text.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
-    this.labelsMap = {};
-    lines.forEach((line, defaultIndex) => {
-      const parts = line.split(/\s+/);
-      if (parts.length > 1 && !isNaN(Number(parts[0]))) {
-        const idx = Number(parts[0]);
-        this.labelsMap[idx] = parts.slice(1).join('_');
-      } else {
-        this.labelsMap[defaultIndex] = line.replace(/\s+/g, '_');
-      }
-    });
-    console.log('Updated class labels from text:', this.labelsMap);
-  }
-
   public async initialize(
-    modelPath: string = '/models/model_unquant.tflite',
-    labelsPath: string = '/models/labels.txt'
+    modelPath: string = APP_CONFIG.modelUrl,
+    labelsPath: string = APP_CONFIG.labelsUrl
   ): Promise<{ success: boolean; message: string }> {
     if (this.isInitializing) {
-      return { success: false, message: 'Classifier is already initializing' };
+      return { success: false, message: 'Detector is already initializing' };
     }
 
     this.isInitializing = true;
@@ -74,39 +60,39 @@ export class PlasticClassifierService {
             delegate: 'GPU'
           },
           runningMode: 'VIDEO',
-          maxResults: 4
+          maxResults: 2
         });
-        console.log('Teachable Machine ImageClassifier initialized with GPU delegate');
+        console.log('Teachable Machine Classifier initialized with GPU acceleration');
       } catch (gpuErr) {
-        console.warn('GPU delegate unavailable, falling back to CPU/WASM delegate:', gpuErr);
+        console.warn('GPU delegate unavailable, falling back to CPU/WASM:', gpuErr);
         this.classifier = await ImageClassifier.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: modelPath,
             delegate: 'CPU'
           },
           runningMode: 'VIDEO',
-          maxResults: 4
+          maxResults: 2
         });
-        console.log('Teachable Machine ImageClassifier initialized with CPU/WASM');
+        console.log('Teachable Machine Classifier initialized with CPU/WASM');
       }
 
       this.isInitializing = false;
-      return { success: true, message: 'Image Classifier model loaded successfully' };
+      return { success: true, message: 'Teachable Machine model loaded successfully' };
     } catch (err: any) {
       this.isInitializing = false;
-      console.error('Failed to initialize ImageClassifier:', err);
+      console.error('Failed to initialize Teachable Machine Classifier:', err);
       return { 
         success: false, 
-        message: err.message || 'Model load failed. Ensure model_unquant.tflite is in public/models/.' 
+        message: err.message || 'Model load failed.' 
       };
     }
   }
 
-  // Runs classification on the current video frame without blocking UI
-  public classifyFrame(
+  // Classifies frame with Teachable Machine AND calculates real dynamic bounding boxes!
+  public detectFrame(
     video: HTMLVideoElement,
     timestampMs: number
-  ): ClassificationResult | null {
+  ): DetectionResult | null {
     if (!this.classifier || this.isInferring || video.readyState < 2) {
       return null;
     }
@@ -118,38 +104,57 @@ export class PlasticClassifierService {
       const result = this.classifier.classifyForVideo(video, timestampMs);
       this.lastInferenceTimeMs = Math.round(performance.now() - start);
 
-      const parsedCategories: ClassificationCategory[] = [];
+      const bottleDetections: DetectedBottle[] = [];
+      const allDetections: DetectedBottle[] = [];
 
       if (result && result.classifications && result.classifications.length > 0) {
         const topCategories = result.classifications[0].categories;
-        for (const cat of topCategories) {
-          const mappedName = (cat.categoryName && cat.categoryName.trim().length > 0)
+        
+        // Find Plastic_Bottle prediction from Teachable Machine
+        let bottleCategory = topCategories.find((cat) => {
+          const name = (cat.categoryName && cat.categoryName.trim().length > 0)
             ? cat.categoryName
             : (this.labelsMap[cat.index] || `Class_${cat.index}`);
+          return name.toLowerCase().includes('bottle') || name.toLowerCase().includes('plastic');
+        });
 
-          parsedCategories.push({
-            index: cat.index,
-            score: cat.score,
-            categoryName: mappedName
-          });
+        // Fallback: check index 0
+        if (!bottleCategory && topCategories.length > 0) {
+          const top = topCategories[0];
+          const mappedName = this.labelsMap[top.index] || '';
+          if (mappedName.toLowerCase().includes('bottle') || top.index === 0) {
+            bottleCategory = top;
+          }
+        }
+
+        const score = bottleCategory ? bottleCategory.score : 0;
+        const isBottle = score >= APP_CONFIG.confidenceThreshold;
+
+        // When Teachable Machine confirms a Plastic Bottle is in view:
+        // Use smart visual localization to generate real dynamic bounding boxes!
+        if (isBottle) {
+          const candidateBoxes = objectLocalizer.findObjectBoxes(video);
+          
+          for (const box of candidateBoxes) {
+            const detectedItem: DetectedBottle = {
+              category: 'Plastic_Bottle',
+              score: score,
+              boundingBox: box
+            };
+            bottleDetections.push(detectedItem);
+            allDetections.push(detectedItem);
+          }
         }
       }
 
-      // Sort descending by score
-      parsedCategories.sort((a, b) => b.score - a.score);
-
-      const topCategory = parsedCategories.length > 0
-        ? parsedCategories[0]
-        : { index: -1, score: 0, categoryName: 'Unknown' };
-
       this.isInferring = false;
       return {
-        categories: parsedCategories,
-        topCategory,
+        bottles: bottleDetections,
+        allDetections,
         inferenceMs: this.lastInferenceTimeMs
       };
     } catch (err) {
-      console.error('Error during video classification:', err);
+      console.error('Error during video detection:', err);
       this.isInferring = false;
       return null;
     }
@@ -161,10 +166,6 @@ export class PlasticClassifierService {
 
   public getInferenceLatency(): number {
     return this.lastInferenceTimeMs;
-  }
-
-  public getLabels(): Record<number, string> {
-    return this.labelsMap;
   }
 
   public cleanup() {
@@ -179,4 +180,4 @@ export class PlasticClassifierService {
   }
 }
 
-export const plasticClassifier = new PlasticClassifierService();
+export const plasticDetector = new TeachableMachineDetectorService();

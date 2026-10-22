@@ -26,6 +26,7 @@
 
   --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
   --shadow-float: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --shadow-card: 0 4px 16px -2px rgba(15, 23, 42, 0.06);
 }
 
 * {
@@ -66,7 +67,7 @@ html, body {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
-  z-index: 10;
+  z-index: 30;
 }
 
 .topbar-row {
@@ -188,12 +189,25 @@ html, body {
 .tel-val.status-waiting { color: #d97706; }
 .tel-val.status-connected { color: #059669; }
 
-/* Camera Viewport: Fills 100% of remaining space */
-.camera-viewport-wrap {
+/* Scrollable Container (allows scroll to reset section only when disarmed) */
+.scrollable-container {
   flex: 1;
+  height: calc(100dvh - 74px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
   position: relative;
+}
+
+.scrollable-container.locked {
+  overflow-y: hidden !important;
+}
+
+/* Camera Viewport: Fills full screen height */
+.camera-viewport-wrap {
   width: 100%;
-  height: 100%;
+  height: calc(100dvh - 74px);
+  position: relative;
   background: #020617;
   overflow: hidden;
   display: flex;
@@ -217,7 +231,7 @@ html, body {
   z-index: 5;
 }
 
-/* Disarmed Stage Overlay Message */
+/* Camera Shutter / Standby Overlay */
 .stage-overlay {
   position: absolute;
   inset: 0;
@@ -225,17 +239,31 @@ html, body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(14px);
   padding: 1.5rem;
   text-align: center;
   z-index: 15;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.35s cubic-bezier(0.4, 0, 0.2, 1), transform 0.35s ease;
+  transform: scale(1);
 }
 
 .stage-overlay.hidden {
   opacity: 0;
   pointer-events: none;
+  transform: scale(1.04);
+}
+
+.overlay-content-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.overlay-content-block.hidden {
+  display: none;
 }
 
 .overlay-icon-wrap {
@@ -271,6 +299,65 @@ html, body {
   margin-bottom: 1.25rem;
 }
 
+/* Standby Radar Ring Effect */
+.standby-radar-wrap {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 1rem;
+}
+
+.standby-icon-core {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--color-amber-light);
+  border: 1px solid #fde68a;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-amber);
+  z-index: 2;
+}
+
+.radar-pulse-ring {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--color-amber);
+  border-radius: 50%;
+  animation: radarPulse 2s cubic-bezier(0.2, 0.8, 0.4, 1) infinite;
+  opacity: 0;
+}
+
+.radar-pulse-ring.delay {
+  animation-delay: 0.8s;
+}
+
+.standby-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  padding: 0.4rem 0.9rem;
+  border-radius: 9999px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.dot-amber {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+  animation: pulseDot 1s infinite;
+}
+
 /* Floating Bottom Control Bar */
 .floating-controls-bar {
   position: absolute;
@@ -287,6 +374,61 @@ html, body {
   box-shadow: var(--shadow-float);
   border: 1px solid rgba(255, 255, 255, 0.8);
   z-index: 20;
+}
+
+/* Admin / Reset Section (Visible below camera when disarmed) */
+.admin-reset-section {
+  padding: 2rem 1.25rem 4rem 1.25rem;
+  background: #f1f5f9;
+  display: flex;
+  justify-content: center;
+  border-top: 1px solid var(--border-light);
+}
+
+.admin-reset-section.hidden-when-armed {
+  display: none !important;
+}
+
+.reset-card {
+  background: #ffffff;
+  border: 1px solid var(--border-light);
+  border-radius: 16px;
+  padding: 1.5rem;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.reset-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text-main);
+}
+
+.reset-card-header h3 {
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.reset-desc {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+}
+
+.reset-desc strong {
+  color: var(--color-emerald);
+  font-size: 1.1rem;
+}
+
+.reset-warning {
+  font-size: 0.78rem;
+  color: #94a3b8;
+  line-height: 1.4;
 }
 
 /* Buttons */
@@ -333,6 +475,20 @@ html, body {
   border: 1px solid #fecdd3;
 }
 
+.btn-outline-danger {
+  background: #fff1f2;
+  border: 1px solid #fda4af;
+  color: var(--color-rose);
+  padding: 0.75rem 1.25rem;
+  font-weight: 700;
+  border-radius: 10px;
+}
+
+.btn-outline-danger:active {
+  background: #fecdd3;
+  transform: scale(0.98);
+}
+
 .btn-icon {
   width: 42px;
   height: 42px;
@@ -356,4 +512,9 @@ html, body {
   0% { transform: scale(0.9); opacity: 0.8; }
   50% { transform: scale(1.2); opacity: 1; }
   100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+@keyframes radarPulse {
+  0% { transform: scale(0.8); opacity: 0.8; }
+  100% { transform: scale(1.6); opacity: 0; }
 }

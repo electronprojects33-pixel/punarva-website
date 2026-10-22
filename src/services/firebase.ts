@@ -3,29 +3,32 @@ import {
   getDatabase, 
   ref, 
   onValue, 
+  set,
   Unsubscribe,
   Database
 } from 'firebase/database';
 import { 
   getFirestore, 
-  collection, 
-  addDoc, 
+  doc, 
+  setDoc, 
+  increment,
   serverTimestamp,
+  onSnapshot,
   initializeFirestore,
   persistentLocalCache,
   persistentMultipleTabManager,
   Firestore
 } from 'firebase/firestore';
 import { FIREBASE_CONFIG, APP_CONFIG } from '../config';
-import { BottleDetectionEvent, ClassificationCategory } from '../types';
+import { BottleDetectionEvent, DetectedBottle } from '../types';
 
 export class FirebaseService {
   private app: FirebaseApp | null = null;
   private rtdb: Database | null = null;
   private firestore: Firestore | null = null;
   private triggerUnsubscribe: Unsubscribe | null = null;
+  private countUnsubscribe: (() => void) | null = null;
   private onTriggerCallback: ((triggered: boolean) => void) | null = null;
-  private onSyncStatusCallback: ((event: BottleDetectionEvent) => void) | null = null;
 
   private currentTriggerValue: boolean = false;
   private isConnectedRTDB: boolean = false;
@@ -35,10 +38,10 @@ export class FirebaseService {
     this.cleanup();
 
     if (!FIREBASE_CONFIG.apiKey || FIREBASE_CONFIG.apiKey === "YOUR_API_KEY") {
-      console.warn('Firebase configuration contains placeholder keys. Please update src/config.ts with your real Firebase keys.');
+      console.warn('Firebase configuration contains placeholder keys. Please update .env or src/config.ts with your real Firebase keys.');
       return { 
         success: false, 
-        message: 'Replace placeholder keys in src/config.ts to connect.' 
+        message: 'Replace placeholder keys in .env to connect.' 
       };
     }
 
@@ -62,7 +65,7 @@ export class FirebaseService {
       }
       this.isConnectedFirestore = true;
 
-      // Subscribe to Realtime Database trigger
+      // Subscribe to Realtime Database trigger attribute (e.g. "object_detected")
       this.listenToTrigger(APP_CONFIG.rtdbTriggerPath);
 
       return { success: true, message: 'Connected to Firebase' };
@@ -74,6 +77,7 @@ export class FirebaseService {
     }
   }
 
+  // Listens to trigger attribute. If it does not exist, defaults it to false in RTDB
   public listenToTrigger(path: string) {
     if (this.triggerUnsubscribe) {
       this.triggerUnsubscribe();
@@ -88,6 +92,18 @@ export class FirebaseService {
         triggerRef, 
         (snapshot) => {
           const val = snapshot.val();
+          
+          // If attribute does not exist in RTDB, create it defaulted to false
+          if (val === null) {
+            console.log(`Attribute "${path}" not found in RTDB. Initializing default to false.`);
+            set(triggerRef, false).catch((err) => console.warn('Could not auto-default RTDB attribute:', err));
+            this.currentTriggerValue = false;
+            if (this.onTriggerCallback) {
+              this.onTriggerCallback(false);
+            }
+            return;
+          }
+
           const isTriggered = val === true || val === 'true' || val === 1;
           this.currentTriggerValue = isTriggered;
           if (this.onTriggerCallback) {
@@ -103,67 +119,106 @@ export class FirebaseService {
     }
   }
 
-  // Non-blocking fire-and-forget write to Firestore
-  public recordBottleDetection(classification: ClassificationCategory): BottleDetectionEvent {
+  // Toggles or sets object_detected value directly in Realtime Database
+  public async setTriggerValue(val: boolean): Promise<void> {
+    this.currentTriggerValue = val;
+    if (this.rtdb) {
+      try {
+        const triggerRef = ref(this.rtdb, APP_CONFIG.rtdbTriggerPath);
+        await set(triggerRef, val);
+      } catch (e) {
+        console.error('Failed to set RTDB value:', e);
+      }
+    }
+  }
+
+  // Non-blocking fire-and-forget write to Firestore: updates bottles_count
+  public recordBottleDetection(bottles: DetectedBottle[]): BottleDetectionEvent {
     const startTime = performance.now();
     const eventId = 'det_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const eventTime = new Date();
+    const countToAdd = Math.max(1, bottles.length);
+    const topScore = bottles.length > 0 ? Math.round(bottles[0].score * 100) : 0;
 
     const detectionRecord: BottleDetectionEvent = {
       id: eventId,
       timestamp: Date.now(),
       formattedTime: eventTime.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      category: classification.categoryName,
-      confidence: Math.round(classification.score * 100),
-      status: this.firestore ? 'PENDING' : 'SYNCED',
+      category: 'plastic_bottle',
+      confidence: topScore,
+      count: countToAdd,
+      status: this.firestore ? 'SYNCED' : 'PENDING',
       latencyMs: 0
     };
 
     if (!this.firestore) {
       detectionRecord.latencyMs = Math.round(performance.now() - startTime);
-      if (this.onSyncStatusCallback) {
-        this.onSyncStatusCallback(detectionRecord);
-      }
       return detectionRecord;
     }
 
-    // Fire-and-forget asynchronous write without delaying camera frame processing
-    const colRef = collection(this.firestore, APP_CONFIG.firestoreCollection);
-    const payload = {
-      detectedAt: serverTimestamp(),
-      clientTimestamp: Date.now(),
-      category: classification.categoryName,
-      confidence: classification.score,
-      appVersion: '1.0.0-pwa'
-    };
-
-    addDoc(colRef, payload)
-      .then((docRef) => {
-        detectionRecord.status = 'SYNCED';
-        detectionRecord.firestoreDocId = docRef.id;
+    // Atomically increment bottles_count in Firestore summary document
+    const statsDocRef = doc(this.firestore, APP_CONFIG.firestoreCollection, APP_CONFIG.firestoreStatsDoc);
+    setDoc(statsDocRef, {
+      bottles_count: increment(countToAdd),
+      last_detected_at: serverTimestamp(),
+      last_count_detected: countToAdd,
+      last_confidence: topScore
+    }, { merge: true })
+      .then(() => {
         detectionRecord.latencyMs = Math.round(performance.now() - startTime);
-        if (this.onSyncStatusCallback) {
-          this.onSyncStatusCallback(detectionRecord);
-        }
       })
       .catch((err) => {
-        console.error('Firestore non-blocking write error:', err);
-        detectionRecord.status = 'FAILED';
-        detectionRecord.latencyMs = Math.round(performance.now() - startTime);
-        if (this.onSyncStatusCallback) {
-          this.onSyncStatusCallback(detectionRecord);
-        }
+        console.error('Firestore bottles_count update error:', err);
       });
 
     return detectionRecord;
   }
 
-  public onTriggerChange(cb: (triggered: boolean) => void) {
-    this.onTriggerCallback = cb;
+  // Resets bottles_count attribute in Firestore to 0
+  public async resetBottleCount(): Promise<boolean> {
+    if (!this.firestore) return false;
+    try {
+      const statsDocRef = doc(this.firestore, APP_CONFIG.firestoreCollection, APP_CONFIG.firestoreStatsDoc);
+      await setDoc(statsDocRef, {
+        bottles_count: 0,
+        last_reset_at: serverTimestamp()
+      }, { merge: true });
+      console.log('bottles_count successfully reset to 0 in Firestore');
+      return true;
+    } catch (e) {
+      console.error('Failed to reset bottles_count in Firestore:', e);
+      return false;
+    }
   }
 
-  public onSyncStatus(cb: (event: BottleDetectionEvent) => void) {
-    this.onSyncStatusCallback = cb;
+  // Subscribes to real-time bottles_count changes from Firestore
+  public listenToBottleCount(cb: (count: number) => void) {
+    if (this.countUnsubscribe) {
+      this.countUnsubscribe();
+      this.countUnsubscribe = null;
+    }
+
+    if (!this.firestore) return;
+
+    try {
+      const statsDocRef = doc(this.firestore, APP_CONFIG.firestoreCollection, APP_CONFIG.firestoreStatsDoc);
+      this.countUnsubscribe = onSnapshot(statsDocRef, (snap) => {
+        if (snap.exists()) {
+          const data = snap.data();
+          if (typeof data.bottles_count === 'number') {
+            cb(data.bottles_count);
+          }
+        }
+      }, (err) => {
+        console.warn('Snapshot listener error on stats doc:', err);
+      });
+    } catch (err) {
+      console.warn('Could not attach Firestore count listener:', err);
+    }
+  }
+
+  public onTriggerChange(cb: (triggered: boolean) => void) {
+    this.onTriggerCallback = cb;
   }
 
   public getTriggerState(): boolean {
@@ -182,6 +237,10 @@ export class FirebaseService {
     if (this.triggerUnsubscribe) {
       this.triggerUnsubscribe();
       this.triggerUnsubscribe = null;
+    }
+    if (this.countUnsubscribe) {
+      this.countUnsubscribe();
+      this.countUnsubscribe = null;
     }
     this.isConnectedRTDB = false;
     this.isConnectedFirestore = false;

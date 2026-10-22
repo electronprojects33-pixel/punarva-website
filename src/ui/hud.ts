@@ -1,4 +1,4 @@
-import { ClassificationCategory } from '../types';
+import { DetectedBottle } from '../types';
 
 export class HudRenderer {
   private canvas: HTMLCanvasElement;
@@ -15,10 +15,14 @@ export class HudRenderer {
     this.ctx = context;
   }
 
-  public syncSize(videoWidth: number, videoHeight: number) {
-    if (this.canvas.width !== videoWidth || this.canvas.height !== videoHeight) {
-      this.canvas.width = videoWidth;
-      this.canvas.height = videoHeight;
+  public syncSize(videoEl: HTMLVideoElement) {
+    const rect = videoEl.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+
+    if (this.canvas.width !== w || this.canvas.height !== h) {
+      this.canvas.width = w;
+      this.canvas.height = h;
     }
   }
 
@@ -26,186 +30,178 @@ export class HudRenderer {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  // Draw active scanning radar animation and central sorting reticle
+  // Draw active scanning laser animation
   public drawScanningGuide(isScanning: boolean) {
+    if (!isScanning) return;
+
     const w = this.canvas.width;
     const h = this.canvas.height;
     if (w === 0 || h === 0) return;
 
     this.ctx.save();
 
-    // Central Viewfinder / Sorter Zone Brackets
-    const boxSize = Math.min(w, h) * 0.6;
-    const boxX = (w - boxSize) / 2;
-    const boxY = (h - boxSize) / 2;
-    const bracketLen = boxSize * 0.15;
-
-    this.ctx.strokeStyle = isScanning ? 'rgba(14, 165, 233, 0.7)' : 'rgba(100, 116, 139, 0.4)';
-    this.ctx.lineWidth = 3;
-
-    // Corner brackets
-    // Top-left
-    this.ctx.beginPath();
-    this.ctx.moveTo(boxX, boxY + bracketLen);
-    this.ctx.lineTo(boxX, boxY);
-    this.ctx.lineTo(boxX + bracketLen, boxY);
-    // Top-right
-    this.ctx.moveTo(boxX + boxSize - bracketLen, boxY);
-    this.ctx.lineTo(boxX + boxSize, boxY);
-    this.ctx.lineTo(boxX + boxSize, boxY + bracketLen);
-    // Bottom-left
-    this.ctx.moveTo(boxX, boxY + boxSize - bracketLen);
-    this.ctx.lineTo(boxX, boxY + boxSize);
-    this.ctx.lineTo(boxX + bracketLen, boxY + boxSize);
-    // Bottom-right
-    this.ctx.moveTo(boxX + boxSize - bracketLen, boxY + boxSize);
-    this.ctx.lineTo(boxX + boxSize, boxY + boxSize);
-    this.ctx.lineTo(boxX + boxSize, boxY + boxSize - bracketLen);
-    this.ctx.stroke();
-
-    // Subtle center crosshairs
-    const cx = w / 2;
-    const cy = h / 2;
-    this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
-    this.ctx.lineWidth = 1;
-    this.ctx.beginPath();
-    this.ctx.moveTo(cx - 14, cy);
-    this.ctx.lineTo(cx + 14, cy);
-    this.ctx.moveTo(cx, cy - 14);
-    this.ctx.lineTo(cx, cy + 14);
-    this.ctx.stroke();
-
-    // Moving laser scanline when actively classifying
-    if (isScanning) {
-      this.scanLineY += 4 * this.scanDirection;
-      if (this.scanLineY > boxY + boxSize) {
-        this.scanLineY = boxY + boxSize;
-        this.scanDirection = -1;
-      } else if (this.scanLineY < boxY) {
-        this.scanLineY = boxY;
-        this.scanDirection = 1;
-      }
-
-      const grad = this.ctx.createLinearGradient(0, this.scanLineY - 24, 0, this.scanLineY + 24);
-      grad.addColorStop(0, 'rgba(14, 165, 233, 0)');
-      grad.addColorStop(0.5, 'rgba(14, 165, 233, 0.35)');
-      grad.addColorStop(1, 'rgba(14, 165, 233, 0)');
-
-      this.ctx.fillStyle = grad;
-      this.ctx.fillRect(boxX, this.scanLineY - 24, boxSize, 48);
-
-      this.ctx.strokeStyle = '#38bdf8';
-      this.ctx.lineWidth = 2;
-      this.ctx.beginPath();
-      this.ctx.moveTo(boxX, this.scanLineY);
-      this.ctx.lineTo(boxX + boxSize, this.scanLineY);
-      this.ctx.stroke();
+    this.scanLineY += 3.5 * this.scanDirection;
+    if (this.scanLineY > h) {
+      this.scanLineY = h;
+      this.scanDirection = -1;
+    } else if (this.scanLineY < 0) {
+      this.scanLineY = 0;
+      this.scanDirection = 1;
     }
+
+    const grad = this.ctx.createLinearGradient(0, this.scanLineY - 20, 0, this.scanLineY + 20);
+    grad.addColorStop(0, 'rgba(14, 165, 233, 0)');
+    grad.addColorStop(0.5, 'rgba(14, 165, 233, 0.25)');
+    grad.addColorStop(1, 'rgba(14, 165, 233, 0)');
+
+    this.ctx.fillStyle = grad;
+    this.ctx.fillRect(0, this.scanLineY - 20, w, 40);
+
+    this.ctx.strokeStyle = '#38bdf8';
+    this.ctx.lineWidth = 1.5;
+    this.ctx.beginPath();
+    this.ctx.moveTo(0, this.scanLineY);
+    this.ctx.lineTo(w, this.scanLineY);
+    this.ctx.stroke();
 
     this.ctx.restore();
   }
 
-  // Render classification probability meters and status banner
-  public renderClassification(
-    categories: ClassificationCategory[],
-    topCategory: ClassificationCategory,
-    isTargetTriggered: boolean,
-    targetName: string
+  // Render multiple dynamic bounding boxes around detected bottles
+  public renderDetections(
+    bottles: DetectedBottle[],
+    videoEl: HTMLVideoElement
   ) {
     const ctx = this.ctx;
-    const w = this.canvas.width;
-    const h = this.canvas.height;
-    if (w === 0 || h === 0) return;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const vw = videoEl.videoWidth;
+    const vh = videoEl.videoHeight;
 
-    ctx.save();
+    if (cw === 0 || ch === 0 || vw === 0 || vh === 0) return;
 
-    // 1. Live Probability Gauges Panel (Top Left)
-    const panelX = 14;
-    const panelY = 14;
-    const panelW = 240;
-    const rowH = 26;
-    const panelH = (categories.length * rowH) + 32;
+    // Calculate object-fit: cover scaling and letterbox offsets
+    const canvasAspect = cw / ch;
+    const videoAspect = vw / vh;
 
-    ctx.fillStyle = 'rgba(11, 19, 41, 0.85)';
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.25)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(panelX, panelY, panelW, panelH, 10);
-    ctx.fill();
-    ctx.stroke();
+    let renderW = cw;
+    let renderH = ch;
+    let offsetX = 0;
+    let offsetY = 0;
 
-    // Panel Header
-    ctx.font = 'bold 10px "JetBrains Mono", monospace';
-    ctx.fillStyle = '#7dd3fc';
-    ctx.fillText('LIVE AI CLASSIFICATION', panelX + 12, panelY + 18);
+    if (canvasAspect > videoAspect) {
+      renderH = cw / videoAspect;
+      offsetY = (ch - renderH) / 2;
+    } else {
+      renderW = ch * videoAspect;
+      offsetX = (cw - renderW) / 2;
+    }
 
-    // Bars for each class
-    categories.forEach((cat, idx) => {
-      const y = panelY + 30 + (idx * rowH);
-      const isTarget = cat.categoryName.toLowerCase().includes('bottle') || 
-                       cat.categoryName.toLowerCase() === targetName.toLowerCase();
-      const pct = Math.round(cat.score * 100);
+    const scaleX = renderW / vw;
+    const scaleY = renderH / vh;
 
-      // Label
-      ctx.font = '600 11px "JetBrains Mono", monospace';
-      ctx.fillStyle = isTarget ? '#34d399' : '#cbd5e1';
-      const label = cat.categoryName.replace(/_/g, ' ');
-      ctx.fillText(label, panelX + 12, y + 12);
+    // 1. Draw individual bounding box for every bottle
+    for (const bottle of bottles) {
+      const { originX, originY, width, height } = bottle.boundingBox;
+      
+      const x = Math.round((originX * scaleX) + offsetX);
+      const y = Math.round((originY * scaleY) + offsetY);
+      const w = Math.round(width * scaleX);
+      const h = Math.round(height * scaleY);
 
-      // Percentage text
-      ctx.textAlign = 'right';
-      ctx.font = 'bold 11px "JetBrains Mono", monospace';
-      ctx.fillText(`${pct}%`, panelX + panelW - 12, y + 12);
-      ctx.textAlign = 'left';
+      const scorePct = Math.round(bottle.score * 100);
 
-      // Bar background track
-      const barX = panelX + 12;
-      const barY = y + 16;
-      const barW = panelW - 24;
-      const barH = 5;
+      ctx.save();
 
-      ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
-      ctx.beginPath();
-      ctx.roundRect(barX, barY, barW, barH, 2.5);
-      ctx.fill();
+      // Translucent emerald fill
+      ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
+      ctx.fillRect(x, y, w, h);
 
-      // Filled Progress Bar
-      const fillW = Math.max(2, (barW * cat.score));
-      ctx.fillStyle = isTarget ? '#10b981' : '#64748b';
-      ctx.beginPath();
-      ctx.roundRect(barX, barY, fillW, barH, 2.5);
-      ctx.fill();
-    });
-
-    // 2. Large Detection Banner when Target is Locked (e.g. Plastic Bottle >= threshold)
-    if (isTargetTriggered) {
-      const bannerW = Math.min(380, w - 40);
-      const bannerH = 46;
-      const bannerX = (w - bannerW) / 2;
-      const bannerY = h - bannerH - 24;
-
+      // Glowing border
       ctx.shadowColor = 'rgba(16, 185, 129, 0.6)';
-      ctx.shadowBlur = 20;
+      ctx.shadowBlur = 12;
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(x, y, w, h);
 
-      // Banner background
-      ctx.fillStyle = 'rgba(6, 78, 59, 0.95)';
+      // Cyber corner brackets
+      const cornerSize = Math.max(10, Math.min(w, h) * 0.22);
       ctx.strokeStyle = '#34d399';
-      ctx.lineWidth = 2;
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 12);
+      // Top-left
+      ctx.moveTo(x, y + cornerSize);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + cornerSize, y);
+      // Top-right
+      ctx.moveTo(x + w - cornerSize, y);
+      ctx.lineTo(x + w, y);
+      ctx.lineTo(x + w, y + cornerSize);
+      // Bottom-left
+      ctx.moveTo(x, y + h - cornerSize);
+      ctx.lineTo(x, y + h);
+      ctx.lineTo(x + cornerSize, y + h);
+      // Bottom-right
+      ctx.moveTo(x + w - cornerSize, y + h);
+      ctx.lineTo(x + w, y + h);
+      ctx.lineTo(x + w, y + h - cornerSize);
+      ctx.stroke();
+
+      // Center crosshair
+      const cx = x + w / 2;
+      const cy = y + h / 2;
+      ctx.strokeStyle = 'rgba(52, 211, 153, 0.8)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cx - 8, cy);
+      ctx.lineTo(cx + 8, cy);
+      ctx.moveTo(cx, cy - 8);
+      ctx.lineTo(cx, cy + 8);
+      ctx.stroke();
+
+      // Label Tag Badge
+      const labelText = `PLASTIC BOTTLE ${scorePct}%`;
+      ctx.font = 'bold 11px "JetBrains Mono", monospace';
+      const textMetrics = ctx.measureText(labelText);
+      const badgeW = textMetrics.width + 16;
+      const badgeH = 22;
+      const badgeY = Math.max(8, y - badgeH - 3);
+
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#064e3b';
+      ctx.beginPath();
+      ctx.roundRect(x, badgeY, badgeW, badgeH, 4);
+      ctx.fill();
+
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = '#a7f3d0';
+      ctx.fillText(labelText, x + 8, badgeY + 15);
+
+      ctx.restore();
+    }
+
+    // 2. Multiple Bottles Found Pill (top-left)
+    if (bottles.length > 0) {
+      ctx.save();
+      const countText = `DETECTED: ${bottles.length} ${bottles.length === 1 ? 'BOTTLE' : 'BOTTLES'}`;
+      ctx.font = 'bold 12px "JetBrains Mono", monospace';
+      const metric = ctx.measureText(countText);
+      const pillW = metric.width + 20;
+
+      ctx.fillStyle = 'rgba(6, 78, 59, 0.9)';
+      ctx.strokeStyle = '#10b981';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.roundRect(14, 14, pillW, 28, 8);
       ctx.fill();
       ctx.stroke();
 
-      // Banner text
-      ctx.shadowBlur = 0;
-      ctx.font = 'bold 15px "Outfit", sans-serif';
-      ctx.fillStyle = '#ffffff';
-      ctx.textAlign = 'center';
-      const pct = Math.round(topCategory.score * 100);
-      ctx.fillText(`✓ PLASTIC BOTTLE DETECTED (${pct}%)`, w / 2, bannerY + 28);
-      ctx.textAlign = 'left';
+      ctx.fillStyle = '#34d399';
+      ctx.fillText(countText, 24, 32);
+      ctx.restore();
     }
-
-    ctx.restore();
   }
 }

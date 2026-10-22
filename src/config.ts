@@ -14,20 +14,20 @@ export const FIREBASE_CONFIG = {
 };
 
 export const APP_CONFIG = {
-  // Firebase Realtime Database path to watch (true/false)
-  rtdbTriggerPath: import.meta.env.VITE_RTDB_TRIGGER_PATH || "sorter/trigger_camera",
+  // Firebase Realtime Database attribute to watch (true/false)
+  rtdbTriggerPath: import.meta.env.VITE_RTDB_TRIGGER_PATH || "object_detected",
 
-  // Firestore collection to record bottle detection logs
+  // Firestore collection & document to record bottles_count
   firestoreCollection: import.meta.env.VITE_FIRESTORE_COLLECTION || "bottle_detections",
+  firestoreStatsDoc: "summary", // Document holding bottles_count attribute
 
-  // Model & Classification Settings
-  modelUrl: "/models/model_unquant.tflite",
-  labelsUrl: "/models/labels.txt",
-  targetClassName: "Plastic_Bottle", // Primary class to trigger bottle sort
-  confidenceThreshold: 0.70,        // 70% confidence threshold
-  cooldownMs: 1500,                  // 1.5s debounce between bottle counts
+  // Model & Teachable Machine Detection Settings
+  modelUrl: "/models/model_unquant.tflite", // Your custom Teachable Machine model
+  labelsUrl: "/models/labels.txt",          // Your Teachable Machine labels
+  confidenceThreshold: 0.65,                // 65% minimum confidence
+  cooldownMs: 1200,                         // Debounce interval between count updates
 
   // Camera Settings
   cameraFacingMode: "environment" as "environment" | "user", // "environment" for rear camera
-  enableAudio: true                  // Synthesized audio chime on detection
+  enableAudio: true                              // Synthesized audio chime on detection
 };

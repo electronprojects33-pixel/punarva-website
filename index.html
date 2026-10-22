@@ -40,7 +40,7 @@
         <!-- Compact Telemetry Strip -->
         <div class="telemetry-strip">
           <div class="tel-item highlight-emerald">
-            <span class="tel-label">Sorted</span>
+            <span class="tel-label">Bottles</span>
             <span id="stat-total-bottles" class="tel-val">0</span>
           </div>
           <div class="tel-item">
@@ -62,55 +62,110 @@
         </div>
       </header>
 
-      <!-- Full-Height Camera Viewport Area -->
-      <main class="camera-viewport-wrap">
-        <video id="camera-video" playsinline muted autoplay></video>
-        <canvas id="hud-canvas"></canvas>
+      <!-- Scrollable Main Container -->
+      <div id="scrollable-container" class="scrollable-container">
+        <!-- Full-Height Camera Viewport Area -->
+        <main class="camera-viewport-wrap">
+          <video id="camera-video" playsinline muted autoplay></video>
+          <canvas id="hud-canvas"></canvas>
 
-        <!-- Disarmed Overlay Message -->
-        <div id="stage-overlay" class="stage-overlay">
-          <div class="overlay-icon-wrap">
-            <svg class="overlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-              <circle cx="12" cy="13" r="4"/>
-            </svg>
+          <!-- Dynamic Camera Stage Overlay (Disarmed & Standby Screens) -->
+          <div id="stage-overlay" class="stage-overlay">
+            <!-- Disarmed State Content -->
+            <div id="overlay-disarmed-content" class="overlay-content-block">
+              <div class="overlay-icon-wrap">
+                <svg class="overlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                  <circle cx="12" cy="13" r="4"/>
+                </svg>
+              </div>
+              <h2 class="overlay-title">Camera System Disarmed</h2>
+              <p class="overlay-sub">
+                Tap "Arm System" below to prepare the camera and connect to Firebase.
+              </p>
+              <button id="btn-arm-stage" class="btn btn-primary btn-large">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <polygon points="5 3 19 12 5 21 5 3"/>
+                </svg>
+                Arm Sorter System
+              </button>
+            </div>
+
+            <!-- Standby State Content (Camera is visually asleep until RTDB signal arrives) -->
+            <div id="overlay-standby-content" class="overlay-content-block hidden">
+              <div class="standby-radar-wrap">
+                <div class="radar-pulse-ring"></div>
+                <div class="radar-pulse-ring delay"></div>
+                <div class="standby-icon-core">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                </div>
+              </div>
+              <h2 class="overlay-title">Standby: Awaiting Object</h2>
+              <p class="overlay-sub">
+                Camera feed will automatically activate when <code>object_detected</code> signal turns <code>true</code>.
+              </p>
+              <div class="standby-chip">
+                <span class="dot-amber"></span>
+                <span>Signal: object_detected == false</span>
+              </div>
+            </div>
           </div>
-          <h2 id="overlay-title" class="overlay-title">Camera Disarmed</h2>
-          <p id="overlay-desc" class="overlay-sub">
-            Tap below to arm camera. Live classification activates automatically when Realtime Database trigger turns <code>true</code>.
-          </p>
-          <button id="btn-arm-stage" class="btn btn-primary btn-large">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-              <polygon points="5 3 19 12 5 21 5 3"/>
-            </svg>
-            Arm Sorter System
-          </button>
-        </div>
 
-        <!-- Floating Bottom Quick Action Controls -->
-        <div class="floating-controls-bar">
-          <button id="btn-flip-camera" class="btn-icon" title="Flip Camera">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.052.776 3.923 2.053 5.343L4 20h4.657"/>
-              <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.052-.776-3.923-2.053-5.343L20 4h-4.657"/>
-            </svg>
-          </button>
+          <!-- Floating Bottom Quick Action Controls -->
+          <div class="floating-controls-bar">
+            <button id="btn-flip-camera" class="btn-icon" title="Flip Camera">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.052.776 3.923 2.053 5.343L4 20h4.657"/>
+                <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.052-.776-3.923-2.053-5.343L20 4h-4.657"/>
+              </svg>
+            </button>
 
-          <button id="btn-toggle-arm" class="btn btn-primary btn-pill">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-            </svg>
-            <span id="btn-toggle-arm-label">Arm System</span>
-          </button>
+            <button id="btn-toggle-arm" class="btn btn-primary btn-pill">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+              </svg>
+              <span id="btn-toggle-arm-label">Arm System</span>
+            </button>
 
-          <button id="btn-toggle-sound" class="btn-icon" title="Toggle Sound">
-            <svg id="icon-sound-on" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
-            </svg>
-          </button>
-        </div>
-      </main>
+            <button id="btn-toggle-sound" class="btn-icon" title="Toggle Sound">
+              <svg id="icon-sound-on" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+              </svg>
+            </button>
+          </div>
+        </main>
+
+        <!-- Admin / Reset Section (Visible only when scrolled down and system is disarmed) -->
+        <section id="admin-reset-section" class="admin-reset-section">
+          <div class="reset-card">
+            <div class="reset-card-header">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/>
+                <circle cx="12" cy="12" r="3"/>
+              </svg>
+              <h3>Counter Maintenance</h3>
+            </div>
+            <p class="reset-desc">
+              Current total bottle count stored in Firestore: <strong id="reset-section-count">0</strong> bottles.
+            </p>
+            <p class="reset-warning">
+              Resetting will set <code>bottles_count</code> to zero in Firestore. This option is only accessible while the system is disarmed.
+            </p>
+            <button id="btn-reset-counter" class="btn btn-outline-danger">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                <path d="M3 3v5h5"/>
+              </svg>
+              Reset Bottle Count to Zero
+            </button>
+          </div>
+        </section>
+      </div>
     </div>
 
     <script type="module" src="/src/main.ts"></script>

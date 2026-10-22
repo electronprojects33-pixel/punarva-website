@@ -1,11 +1,11 @@
 import './style.css';
 import confetti from 'canvas-confetti';
 import { APP_CONFIG } from './config';
-import { ClassificationCategory, SorterState } from './types';
+import { DetectedBottle, SorterState } from './types';
 import { soundEffects } from './services/audio';
 import { wakeLockManager } from './services/wakelock';
 import { firebaseService } from './services/firebase';
-import { plasticClassifier } from './services/detector';
+import { plasticDetector } from './services/detector';
 import { HudRenderer } from './ui/hud';
 
 class SorterApp {
@@ -19,9 +19,13 @@ class SorterApp {
   private canvasEl!: HTMLCanvasElement;
   private stateBadgeEl!: HTMLElement;
   private stateTextEl!: HTMLElement;
+  private scrollableContainerEl!: HTMLElement;
   private stageOverlayEl!: HTMLElement;
-  private overlayTitleEl!: HTMLElement;
-  private overlayDescEl!: HTMLElement;
+  private overlayDisarmedContentEl!: HTMLElement;
+  private overlayStandbyContentEl!: HTMLElement;
+  private adminResetSectionEl!: HTMLElement;
+  private resetSectionCountEl!: HTMLElement;
+  private btnResetCounterEl!: HTMLButtonElement;
   private btnArmStageEl!: HTMLButtonElement;
   private btnToggleArmEl!: HTMLButtonElement;
   private btnToggleArmLabel!: HTMLElement;
@@ -59,9 +63,13 @@ class SorterApp {
     this.canvasEl = document.getElementById('hud-canvas') as HTMLCanvasElement;
     this.stateBadgeEl = document.getElementById('system-state-badge')!;
     this.stateTextEl = document.getElementById('system-state-text')!;
+    this.scrollableContainerEl = document.getElementById('scrollable-container')!;
     this.stageOverlayEl = document.getElementById('stage-overlay')!;
-    this.overlayTitleEl = document.getElementById('overlay-title')!;
-    this.overlayDescEl = document.getElementById('overlay-desc')!;
+    this.overlayDisarmedContentEl = document.getElementById('overlay-disarmed-content')!;
+    this.overlayStandbyContentEl = document.getElementById('overlay-standby-content')!;
+    this.adminResetSectionEl = document.getElementById('admin-reset-section')!;
+    this.resetSectionCountEl = document.getElementById('reset-section-count')!;
+    this.btnResetCounterEl = document.getElementById('btn-reset-counter') as HTMLButtonElement;
     this.btnArmStageEl = document.getElementById('btn-arm-stage') as HTMLButtonElement;
     this.btnToggleArmEl = document.getElementById('btn-toggle-arm') as HTMLButtonElement;
     this.btnToggleArmLabel = document.getElementById('btn-toggle-arm-label')!;
@@ -103,6 +111,34 @@ class SorterApp {
       this.btnToggleSoundEl.style.opacity = this.audioEnabled ? '1' : '0.4';
     });
 
+    // Tap RTDB indicator to manually toggle object_detected signal for easy testing
+    this.pillRtdbEl.style.cursor = 'pointer';
+    this.pillRtdbEl.title = 'Click to toggle object_detected signal ON/OFF';
+    this.pillRtdbEl.addEventListener('click', async () => {
+      const current = firebaseService.getTriggerState();
+      const next = !current;
+      console.log(`Manually toggling RTDB object_detected to ${next}`);
+      await firebaseService.setTriggerValue(next);
+    });
+
+    // Reset bottle counter button (accessible when scrolled down and disarmed)
+    this.btnResetCounterEl.addEventListener('click', async () => {
+      if (this.state !== 'DISARMED') {
+        alert('Please disarm the sorter system before resetting the counter.');
+        return;
+      }
+      if (confirm('Are you sure you want to reset the Firestore bottles_count to zero?')) {
+        this.btnResetCounterEl.disabled = true;
+        this.btnResetCounterEl.innerText = 'Resetting...';
+        await firebaseService.resetBottleCount();
+        this.totalBottlesDetected = 0;
+        this.statTotalBottlesEl.innerText = '0';
+        this.resetSectionCountEl.innerText = '0';
+        this.btnResetCounterEl.disabled = false;
+        this.btnResetCounterEl.innerText = 'Reset Bottle Count to Zero';
+      }
+    });
+
     // Wake lock status changes
     wakeLockManager.onStatusChange((active) => {
       this.pillWakeLockEl.innerText = active ? 'ON' : 'OFF';
@@ -114,40 +150,48 @@ class SorterApp {
     const initResult = firebaseService.initialize();
     console.log('Firebase Init:', initResult);
 
-    // RTDB Trigger listener
+    // RTDB Trigger listener for object_detected
     firebaseService.onTriggerChange((triggered) => {
       this.handleRtdbTriggerChange(triggered);
     });
 
-    // Update connection status
+    // Real-time bottle count listener from Firestore
+    firebaseService.listenToBottleCount((count) => {
+      this.totalBottlesDetected = count;
+      this.statTotalBottlesEl.innerText = `${count}`;
+      this.resetSectionCountEl.innerText = `${count}`;
+    });
+
     this.updateRtdbIndicator();
   }
 
   private updateRtdbIndicator() {
-    const rtdbReady = firebaseService.isRTDBReady();
-    if (rtdbReady) {
-      this.pillRtdbEl.innerText = 'ONLINE';
+    const isTriggered = firebaseService.getTriggerState();
+    if (isTriggered) {
+      this.pillRtdbEl.innerText = 'Signal: ON';
       this.pillRtdbEl.className = 'tel-val status-connected';
     } else {
-      this.pillRtdbEl.innerText = 'WAITING';
+      this.pillRtdbEl.innerText = 'Signal: OFF';
       this.pillRtdbEl.className = 'tel-val status-waiting';
     }
   }
 
-  // Transitions state when RTDB trigger changes
+  // Transitions state when RTDB object_detected attribute changes
   private handleRtdbTriggerChange(triggered: boolean) {
+    this.updateRtdbIndicator();
+
     if (this.state === 'DISARMED') {
-      console.info('RTDB triggered, but camera is disarmed. Awaiting user arming gesture.');
+      console.info('RTDB object_detected changed, but system is disarmed. Awaiting user arming.');
       return;
     }
 
     if (triggered) {
-      console.log('RTDB trigger changed to TRUE: Activating frame classification loop');
+      console.log('Signal received: object_detected == true. Activating camera viewfinder and multi-bottle detection!');
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
     } else {
-      console.log('RTDB trigger changed to FALSE: Pausing classification loop to Standby');
+      console.log('Signal ended: object_detected == false. Returning camera view to standby.');
       this.state = 'STANDBY';
       this.hudRenderer.clear();
       this.updateUIForState('STANDBY');
@@ -156,8 +200,6 @@ class SorterApp {
 
   // Arm the system (requests camera, wake lock, loads model)
   public async armSystem() {
-    this.overlayTitleEl.innerText = 'Starting Camera...';
-    this.overlayDescEl.innerText = 'Acquiring display lock and loading Teachable Machine model...';
     this.btnArmStageEl.disabled = true;
 
     try {
@@ -167,14 +209,11 @@ class SorterApp {
       // 2. Start Camera
       await this.startCamera();
 
-      // 3. Load Teachable Machine Classifier Model
-      if (!plasticClassifier.isReady()) {
-        const modelRes = await plasticClassifier.initialize(
-          APP_CONFIG.modelUrl,
-          APP_CONFIG.labelsUrl
-        );
+      // 3. Load Teachable Machine Detection Model (with dynamic bounding boxes)
+      if (!plasticDetector.isReady()) {
+        const modelRes = await plasticDetector.initialize(APP_CONFIG.modelUrl, APP_CONFIG.labelsUrl);
         if (!modelRes.success) {
-          console.warn('Model initialization notice:', modelRes.message);
+          console.warn('Model notice:', modelRes.message);
         }
       }
 
@@ -185,13 +224,14 @@ class SorterApp {
         this.state = 'SCANNING';
         this.updateUIForState('SCANNING');
       } else {
+        // Armed, but signal hasn't arrived: show Standby shutter screen
         this.state = 'STANDBY';
         this.updateUIForState('STANDBY');
       }
 
       this.updateRtdbIndicator();
 
-      // Start continuous frame pipeline
+      // Start continuous frame detection pipeline
       this.startFramePipeline();
     } catch (err: any) {
       console.error('Failed to arm system:', err);
@@ -244,54 +284,38 @@ class SorterApp {
     await this.videoEl.play();
 
     this.videoEl.onloadedmetadata = () => {
-      const vw = this.videoEl.videoWidth;
-      const vh = this.videoEl.videoHeight;
-      this.hudRenderer.syncSize(vw, vh);
+      this.hudRenderer.syncSize(this.videoEl);
     };
   }
 
-  // Real-time camera frame classification pipeline
+  // Real-time camera frame detection pipeline (actively draws multiple bounding boxes)
   private startFramePipeline() {
     const loop = (timestamp: number) => {
       this.calculateFps(timestamp);
 
       if (this.videoEl.videoWidth > 0) {
-        this.hudRenderer.syncSize(this.videoEl.videoWidth, this.videoEl.videoHeight);
+        this.hudRenderer.syncSize(this.videoEl);
       }
 
-      // Process only if in SCANNING or DETECTED states
-      if (this.state === 'SCANNING' || this.state === 'DETECTED' || this.state === 'COOLDOWN') {
+      // MODEL RUNS IN SCANNING / DETECTED (when object_detected == true)
+      if (this.state === 'SCANNING' || this.state === 'DETECTED') {
         this.hudRenderer.clear();
-        this.hudRenderer.drawScanningGuide(this.state === 'SCANNING');
+        this.hudRenderer.drawScanningGuide(true);
 
-        if (!this.isProcessingFrame && plasticClassifier.isReady()) {
+        if (!this.isProcessingFrame && plasticDetector.isReady()) {
           this.isProcessingFrame = true;
 
-          const result = plasticClassifier.classifyFrame(this.videoEl, timestamp);
+          const result = plasticDetector.detectFrame(this.videoEl, timestamp);
           if (result) {
-            const { categories, topCategory, inferenceMs } = result;
+            const { bottles, inferenceMs } = result;
 
-            // Update latency displays
             this.statModelLatencyEl.innerText = `${inferenceMs}`;
 
-            // Check if plastic bottle exceeds threshold
-            const targetName = APP_CONFIG.targetClassName.toLowerCase();
-            const bottleMatch = categories.find((cat) => {
-              const name = cat.categoryName.toLowerCase();
-              return (name === targetName || name.includes('bottle')) &&
-                     cat.score >= APP_CONFIG.confidenceThreshold;
-            });
+            // Draw bounding boxes around all detected bottles
+            this.hudRenderer.renderDetections(bottles, this.videoEl);
 
-            const isBottleTriggered = !!bottleMatch;
-            this.hudRenderer.renderClassification(
-              categories, 
-              topCategory, 
-              isBottleTriggered, 
-              APP_CONFIG.targetClassName
-            );
-
-            if (bottleMatch) {
-              this.onBottleDetected(bottleMatch);
+            if (bottles.length > 0) {
+              this.onBottlesDetected(bottles);
             }
           }
 
@@ -305,8 +329,8 @@ class SorterApp {
     this.animationFrameId = requestAnimationFrame(loop);
   }
 
-  // Triggered when a bottle is recognized by the classifier
-  private onBottleDetected(bottle: ClassificationCategory) {
+  // Triggered when one or more plastic bottles are recognized
+  private onBottlesDetected(bottles: DetectedBottle[]) {
     const now = performance.now();
 
     // Check debounce / cooldown
@@ -315,22 +339,20 @@ class SorterApp {
     }
 
     this.lastDetectionTime = now;
-    this.totalBottlesDetected++;
-    this.statTotalBottlesEl.innerText = `${this.totalBottlesDetected}`;
 
     // Audio chime
     soundEffects.playDetectionChime();
 
     // Confetti burst
     confetti({
-      particleCount: 20,
+      particleCount: 22,
       spread: 60,
       origin: { y: 0.65 },
       colors: ['#059669', '#10b981', '#38bdf8']
     });
 
-    // Non-blocking Firestore dispatch in background (no UI blocking)
-    firebaseService.recordBottleDetection(bottle);
+    // Non-blocking Firestore update: increments bottles_count by number of bottles found
+    firebaseService.recordBottleDetection(bottles);
 
     // Briefly pulse status badge to DETECTED
     this.state = 'DETECTED';
@@ -355,22 +377,45 @@ class SorterApp {
     }
   }
 
+  // Updates UI state, overlays, and scroll permissions
   private updateUIForState(st: SorterState) {
     this.stateBadgeEl.className = 'state-badge ' + st.toLowerCase();
     this.stateTextEl.innerText = st;
 
     if (st === 'DISARMED') {
+      // 1. Allow scrolling down to the reset button only when disarmed
+      this.scrollableContainerEl.classList.remove('locked');
+      this.adminResetSectionEl.classList.remove('hidden-when-armed');
+
+      // 2. Show Disarmed overlay, hide Standby overlay
       this.stageOverlayEl.classList.remove('hidden');
-      this.overlayTitleEl.innerText = 'Camera Disarmed';
-      this.overlayDescEl.innerText = 'Tap below to arm camera. Live classification activates automatically when Realtime Database trigger turns true.';
+      this.overlayDisarmedContentEl.classList.remove('hidden');
+      this.overlayStandbyContentEl.classList.add('hidden');
+
       this.btnToggleArmLabel.innerText = 'Arm System';
       this.btnToggleArmEl.className = 'btn btn-primary btn-pill';
     } else if (st === 'STANDBY') {
-      this.stageOverlayEl.classList.add('hidden');
+      // Pin to top, lock scrolling so reset button cannot be reached during operation
+      this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
+      this.scrollableContainerEl.classList.add('locked');
+      this.adminResetSectionEl.classList.add('hidden-when-armed');
+
+      // Show Standby screen masking camera feed until signal arrives
+      this.stageOverlayEl.classList.remove('hidden');
+      this.overlayDisarmedContentEl.classList.add('hidden');
+      this.overlayStandbyContentEl.classList.remove('hidden');
+
       this.btnToggleArmLabel.innerText = 'Disarm';
       this.btnToggleArmEl.className = 'btn btn-danger btn-pill';
     } else if (st === 'SCANNING') {
+      // Pin to top, lock scrolling
+      this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
+      this.scrollableContainerEl.classList.add('locked');
+      this.adminResetSectionEl.classList.add('hidden-when-armed');
+
+      // SIGNAL IS HERE: Camera feed revealed! Shutter screen dissolves away smoothly
       this.stageOverlayEl.classList.add('hidden');
+
       this.btnToggleArmLabel.innerText = 'Disarm';
       this.btnToggleArmEl.className = 'btn btn-danger btn-pill';
     }
