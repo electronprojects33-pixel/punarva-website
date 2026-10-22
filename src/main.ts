@@ -10,8 +10,6 @@ import { HudRenderer } from './ui/hud';
 
 const ADMIN_PASSWORD = 'punarva123';
 const THANK_YOU_DURATION_MS = 4000;
-const RTDB_BASE_URL =
-  'https://plastic-bottle-sorting-machine-default-rtdb.asia-southeast1.firebasedatabase.app';
 
 class SorterApp {
   private state: SorterState = 'DISARMED';
@@ -20,8 +18,6 @@ class SorterApp {
   private audioEnabled = APP_CONFIG.enableAudio;
   private adminAuthenticated = false;
   private thankYouTimer: ReturnType<typeof setTimeout> | null = null;
-  private manualOverride = false;
-  private manualBusy = false;
 
   private videoEl!: HTMLVideoElement;
   private canvasEl!: HTMLCanvasElement;
@@ -62,14 +58,6 @@ class SorterApp {
   private publicStatusEl!: HTMLElement;
   private publicStatusTextEl!: HTMLElement;
   private publicThankYouEl!: HTMLElement;
-
-  private manualToggleEl!: HTMLInputElement;
-  private manualStatusEl!: HTMLElement;
-  private manualControlsEl!: HTMLElement;
-  private manualAngleEl!: HTMLInputElement;
-  private btnSendServoEl!: HTMLButtonElement;
-  private btnManualCaptureEl!: HTMLButtonElement;
-  private manualResultEl!: HTMLElement;
 
   private frameCount = 0;
   private lastFpsCalcTime = performance.now();
@@ -141,14 +129,6 @@ class SorterApp {
     this.publicStatusEl = this.getElement('public-live-status');
     this.publicStatusTextEl = this.getElement('public-system-status-text');
     this.publicThankYouEl = this.getElement('public-thank-you');
-
-    this.manualToggleEl = this.getElement<HTMLInputElement>('manual-override-toggle');
-    this.manualStatusEl = this.getElement('manual-override-status');
-    this.manualControlsEl = this.getElement('manual-controls');
-    this.manualAngleEl = this.getElement<HTMLInputElement>('manual-servo-angle');
-    this.btnSendServoEl = this.getElement<HTMLButtonElement>('btn-send-servo');
-    this.btnManualCaptureEl = this.getElement<HTMLButtonElement>('btn-manual-capture');
-    this.manualResultEl = this.getElement('manual-result');
   }
 
   private logDiagnostic(tag: string, message: string, data?: unknown) {
@@ -165,199 +145,6 @@ class SorterApp {
 
     if (this.tickerLogMsgEl) {
       this.tickerLogMsgEl.innerText = formatted;
-    }
-  }
-
-  // ---------- RTDB helpers (new paths, direct REST) ----------
-
-  private async rtdbPut(path: string, value: unknown) {
-    const response = await fetch(`${RTDB_BASE_URL}${path}.json`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(value)
-    });
-
-    if (!response.ok) {
-      throw new Error(`RTDB write ${path} failed (${response.status})`);
-    }
-  }
-
-  private async rtdbGet(path: string): Promise<unknown> {
-    const response = await fetch(`${RTDB_BASE_URL}${path}.json`);
-
-    if (!response.ok) {
-      throw new Error(`RTDB read ${path} failed (${response.status})`);
-    }
-
-    return response.json();
-  }
-
-  private writeBottleVerified(value: 'pending' | 'yes' | 'no') {
-    this.rtdbPut('/bottle_verified', value).catch((error) => {
-      this.logDiagnostic('RTDB ERROR', String(error));
-    });
-  }
-
-  // ---------- Manual override ----------
-
-  private updateManualOverrideUI() {
-    this.manualToggleEl.checked = this.manualOverride;
-    this.manualStatusEl.innerText = this.manualOverride ? 'ON' : 'OFF';
-    this.manualControlsEl.classList.toggle('hidden', !this.manualOverride);
-  }
-
-  private async setManualOverride(enabled: boolean) {
-    const previous = this.manualOverride;
-    this.manualOverride = enabled;
-    this.updateManualOverrideUI();
-
-    try {
-      await this.rtdbPut('/manual_override', enabled);
-      this.logDiagnostic('MANUAL', `Manual override ${enabled ? 'ON' : 'OFF'}.`);
-    } catch (error) {
-      this.manualOverride = previous;
-      this.updateManualOverrideUI();
-      this.logDiagnostic('MANUAL ERROR', String(error));
-      alert('Could not update manual override. Check the console.');
-    }
-  }
-
-  private async syncManualOverrideFromRtdb() {
-    try {
-      const value = await this.rtdbGet('/manual_override');
-      this.manualOverride = value === true;
-      this.updateManualOverrideUI();
-    } catch (error) {
-      this.logDiagnostic('MANUAL ERROR', String(error));
-    }
-  }
-
-  private async sendServoCommand() {
-    if (!this.adminAuthenticated || !this.manualOverride) return;
-
-    const angle = Math.round(Number(this.manualAngleEl.value));
-
-    if (!Number.isFinite(angle) || angle < 0 || angle > 180) {
-      alert('Enter a servo angle between 0 and 180.');
-      return;
-    }
-
-    this.btnSendServoEl.disabled = true;
-
-    try {
-      await this.rtdbPut('/move_servo', angle);
-      this.manualResultEl.innerText = `Servo command sent: ${angle}°`;
-      this.logDiagnostic('MANUAL', `Servo command ${angle} sent.`);
-    } catch (error) {
-      this.logDiagnostic('MANUAL ERROR', String(error));
-      alert('Could not send the servo command. Check the console.');
-    } finally {
-      this.btnSendServoEl.disabled = false;
-    }
-  }
-
-  private async manualCaptureAndAnalyze() {
-    if (!this.adminAuthenticated || !this.manualOverride || this.manualBusy) return;
-
-    if (!geminiVision.hasApiKey()) {
-      this.logDiagnostic('GEMINI ERROR', 'Gemini API key is missing.');
-      alert('Please configure your Gemini API key in .env.');
-      return;
-    }
-
-    if (geminiVision.isBusy()) {
-      this.logDiagnostic('GEMINI REST', 'Previous analysis is still in progress.');
-      return;
-    }
-
-    this.manualBusy = true;
-    this.btnManualCaptureEl.disabled = true;
-    this.manualResultEl.innerText = 'Turning on camera...';
-
-    const startedCamera = this.currentStream === null;
-
-    try {
-      if (startedCamera) {
-        await this.startCamera();
-        await new Promise((resolve) => setTimeout(resolve, 700));
-      }
-
-      // Show the live camera while capturing
-      this.stageOverlayEl.classList.add('hidden');
-
-      this.manualResultEl.innerText = 'Capturing & analyzing...';
-      this.statLivePredictionEl.innerText = 'Analyzing...';
-      this.statLivePredictionEl.style.color = '#38bdf8';
-      this.tickerClassNameEl.innerText = 'Manual Capture & Analyze...';
-      this.tickerScoreEl.innerText = '--';
-      this.tickerBarFillEl.style.width = '50%';
-      this.tickerBarFillEl.className = 'ticker-bar-fill';
-      this.tickerDotEl.className = 'ticker-dot';
-
-      const result = await geminiVision.analyzePhoto(this.videoEl);
-      this.statModelLatencyEl.innerText = String(result.inferenceMs);
-      const scorePct = Math.round(result.confidence * 100);
-
-      const isBottle =
-        result.isPlasticBottle &&
-        result.confidence >= APP_CONFIG.confidenceThreshold;
-
-      if (isBottle) {
-        this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
-        this.statLivePredictionEl.style.color = '#059669';
-        this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
-        this.tickerScoreEl.innerText = `${scorePct}%`;
-        this.tickerBarFillEl.style.width = `${scorePct}%`;
-        this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
-        this.tickerDotEl.className = 'ticker-dot active-plastic';
-        this.manualResultEl.innerText =
-          `Plastic bottle (${scorePct}%): ${result.reason}`;
-        this.writeBottleVerified('yes');
-      } else {
-        this.statLivePredictionEl.innerText = 'No Bottle';
-        this.statLivePredictionEl.style.color = '#0284c7';
-        this.tickerClassNameEl.innerText = result.isPlasticBottle
-          ? `Low Confidence (${scorePct}%)`
-          : 'Not a Plastic Bottle';
-        this.tickerScoreEl.innerText = `${scorePct}%`;
-        this.tickerBarFillEl.style.width = '0%';
-        this.tickerBarFillEl.className = 'ticker-bar-fill other';
-        this.tickerDotEl.className = 'ticker-dot active-other';
-        this.manualResultEl.innerText =
-          `Not a plastic bottle (${scorePct}%): ${result.reason}`;
-        this.writeBottleVerified('no');
-      }
-
-      this.tickerLogMsgEl.innerText =
-        `[Manual] ${result.reason} (${result.inferenceMs}ms)`;
-      this.logDiagnostic(
-        'MANUAL',
-        `Analysis done: ${isBottle ? 'bottle' : 'not a bottle'} (${scorePct}%).`
-      );
-    } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logDiagnostic('MANUAL ERROR', `Manual capture failed: ${message}`);
-      this.statLivePredictionEl.innerText = 'API Error';
-      this.statLivePredictionEl.style.color = '#ef4444';
-      this.tickerClassNameEl.innerText = 'Analysis Failed';
-      this.manualResultEl.innerText = `Error: ${message}`;
-    } finally {
-      this.manualBusy = false;
-      this.btnManualCaptureEl.disabled = false;
-
-      // If the camera was only turned on for this capture, turn it off again
-      if (startedCamera) {
-        setTimeout(() => {
-          if (this.state === 'DISARMED' && !this.manualBusy) {
-            if (this.currentStream) {
-              this.currentStream.getTracks().forEach((track) => track.stop());
-              this.currentStream = null;
-            }
-            this.videoEl.srcObject = null;
-            this.stageOverlayEl.classList.remove('hidden');
-          }
-        }, 3000);
-      }
     }
   }
 
@@ -383,7 +170,6 @@ class SorterApp {
           this.adminLoginErrorEl.classList.add('hidden');
           this.adminPasswordInputEl.value = '';
           this.showScreen('admin');
-          void this.syncManualOverrideFromRtdb();
           this.logDiagnostic('ADMIN', 'Administrator authenticated.');
         } else {
           this.adminLoginErrorEl.classList.remove('hidden');
@@ -485,23 +271,6 @@ class SorterApp {
       }
     });
 
-    // Manual override controls
-    this.manualToggleEl.addEventListener('change', () => {
-      if (!this.adminAuthenticated) {
-        this.manualToggleEl.checked = this.manualOverride;
-        return;
-      }
-      void this.setManualOverride(this.manualToggleEl.checked);
-    });
-
-    this.btnSendServoEl.addEventListener('click', () => {
-      void this.sendServoCommand();
-    });
-
-    this.btnManualCaptureEl.addEventListener('click', () => {
-      void this.manualCaptureAndAnalyze();
-    });
-
     wakeLockManager.onStatusChange((active) => {
       this.pillWakeLockEl.innerText = active ? 'ON' : 'OFF';
       this.pillWakeLockEl.style.color = active ? '#059669' : '#64748b';
@@ -519,11 +288,6 @@ class SorterApp {
 
     if (screen !== 'admin' && this.state !== 'DISARMED') {
       this.disarmSystem();
-    }
-
-    // Leaving the admin screen turns manual override OFF
-    if (screen !== 'admin' && this.manualOverride) {
-      void this.setManualOverride(false);
     }
   }
 
@@ -586,14 +350,6 @@ class SorterApp {
   private async handleRtdbTriggerChange(triggered: boolean) {
     this.updateRtdbIndicator();
 
-    if (this.manualOverride) {
-      this.logDiagnostic(
-        'RTDB',
-        `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}); manual override is ON, ignored.`
-      );
-      return;
-    }
-
     if (this.state === 'DISARMED') {
       this.logDiagnostic(
         'RTDB',
@@ -604,7 +360,6 @@ class SorterApp {
 
     if (triggered) {
       this.hasDetectedForCurrentTrigger = false;
-      this.writeBottleVerified('pending');
       this.logDiagnostic(
         'RTDB TRIGGER',
         'Signal ON. Capturing image for Gemini analysis.'
@@ -677,7 +432,6 @@ class SorterApp {
         this.tickerLogMsgEl.innerText =
           `[Gemini REST] Bottle verified (${scorePct}%): ${result.reason}`;
 
-        this.writeBottleVerified('yes');
         this.onBottleIdentified(result);
       } else {
         this.statLivePredictionEl.innerText = 'No Bottle';
@@ -691,8 +445,6 @@ class SorterApp {
         this.tickerDotEl.className = 'ticker-dot active-other';
         this.tickerLogMsgEl.innerText =
           `[Gemini REST] ${result.reason} (${result.inferenceMs}ms)`;
-
-        this.writeBottleVerified('no');
 
         this.logDiagnostic(
           'GEMINI REST',
@@ -729,7 +481,7 @@ class SorterApp {
       await this.startCamera();
       soundEffects.playArmedChime();
 
-      if (firebaseService.getTriggerState() && !this.manualOverride) {
+      if (firebaseService.getTriggerState()) {
         this.state = 'SCANNING';
         this.updateUIForState('SCANNING');
         this.logDiagnostic('SYSTEM', 'System armed; trigger is already ON.');

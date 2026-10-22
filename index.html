@@ -217,46 +217,6 @@
               </button>
             </div>
           </section>
-
-          <!-- MANUAL OVERRIDE (admin only) -->
-          <section id="manual-override-section" class="admin-reset-section">
-            <div class="reset-card">
-              <h3>Manual Override</h3>
-              <p class="reset-desc">
-                Status: <strong id="manual-override-status">OFF</strong>
-              </p>
-              <p class="reset-warning">
-                When ON, the automatic IR and camera trigger is ignored and you control the servo and camera by hand.
-              </p>
-
-              <label class="manual-toggle-row" for="manual-override-toggle">
-                <input id="manual-override-toggle" type="checkbox" />
-                <span>Enable Manual Override</span>
-              </label>
-
-              <div id="manual-controls" class="manual-controls hidden">
-                <label for="manual-servo-angle">Servo angle (0 to 180)</label>
-                <input
-                  id="manual-servo-angle"
-                  type="number"
-                  min="0"
-                  max="180"
-                  step="1"
-                  value="180"
-                  inputmode="numeric"
-                />
-                <button id="btn-send-servo" class="btn btn-primary btn-large" type="button">
-                  Send Servo Command
-                </button>
-
-                <button id="btn-manual-capture" class="btn btn-primary btn-large" type="button">
-                  Capture &amp; Analyze
-                </button>
-
-                <p id="manual-result" class="reset-warning">No manual capture yet.</p>
-              </div>
-            </div>
-          </section>
         </div>
       </div>
     </div>
