@@ -1,0 +1,19 @@
+{
+  "name": "Plastic Bottle AI Sorter",
+  "short_name": "BottleSorter",
+  "description": "Real-time edge TFLite plastic bottle detection PWA with Firebase sync",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "landscape-primary",
+  "background_color": "#090d16",
+  "theme_color": "#0ea5e9",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["utilities", "productivity", "industrial"]
+}

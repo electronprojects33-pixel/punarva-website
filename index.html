@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>AeroSort AI - Mobile Sorter</title>
+    <meta name="description" content="Mobile-first edge TFLite plastic bottle sorter PWA with Firebase Realtime sync." />
+    
+    <!-- PWA Setup -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#ffffff" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&family=Outfit:wght@600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div class="mobile-app-shell">
+      <!-- Minimalist Top Bar: Header & Telemetry -->
+      <header class="mobile-topbar">
+        <div class="topbar-row">
+          <div class="brand-group">
+            <img src="/icon.svg" alt="AeroSort Logo" class="brand-icon" />
+            <span class="brand-name">AeroSort</span>
+          </div>
+
+          <!-- Live State Badge -->
+          <div id="system-state-badge" class="state-badge disarmed">
+            <span class="state-dot"></span>
+            <span id="system-state-text">DISARMED</span>
+          </div>
+        </div>
+
+        <!-- Compact Telemetry Strip -->
+        <div class="telemetry-strip">
+          <div class="tel-item highlight-emerald">
+            <span class="tel-label">Sorted</span>
+            <span id="stat-total-bottles" class="tel-val">0</span>
+          </div>
+          <div class="tel-item">
+            <span class="tel-label">Latency</span>
+            <span class="tel-val"><span id="stat-model-latency">0</span>ms</span>
+          </div>
+          <div class="tel-item">
+            <span class="tel-label">FPS</span>
+            <span id="stat-stream-fps" class="tel-val">0</span>
+          </div>
+          <div class="tel-item">
+            <span class="tel-label">RTDB</span>
+            <span id="pill-rtdb" class="tel-val status-waiting">WAITING</span>
+          </div>
+          <div class="tel-item">
+            <span class="tel-label">Lock</span>
+            <span id="pill-wakelock" class="tel-val">OFF</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Full-Height Camera Viewport Area -->
+      <main class="camera-viewport-wrap">
+        <video id="camera-video" playsinline muted autoplay></video>
+        <canvas id="hud-canvas"></canvas>
+
+        <!-- Disarmed Overlay Message -->
+        <div id="stage-overlay" class="stage-overlay">
+          <div class="overlay-icon-wrap">
+            <svg class="overlay-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+          </div>
+          <h2 id="overlay-title" class="overlay-title">Camera Disarmed</h2>
+          <p id="overlay-desc" class="overlay-sub">
+            Tap below to arm camera. Live classification activates automatically when Realtime Database trigger turns <code>true</code>.
+          </p>
+          <button id="btn-arm-stage" class="btn btn-primary btn-large">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            Arm Sorter System
+          </button>
+        </div>
+
+        <!-- Floating Bottom Quick Action Controls -->
+        <div class="floating-controls-bar">
+          <button id="btn-flip-camera" class="btn-icon" title="Flip Camera">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 10c0-4.418-3.582-8-8-8s-8 3.582-8 8c0 2.052.776 3.923 2.053 5.343L4 20h4.657"/>
+              <path d="M4 14c0 4.418 3.582 8 8 8s8-3.582 8-8c0-2.052-.776-3.923-2.053-5.343L20 4h-4.657"/>
+            </svg>
+          </button>
+
+          <button id="btn-toggle-arm" class="btn btn-primary btn-pill">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            <span id="btn-toggle-arm-label">Arm System</span>
+          </button>
+
+          <button id="btn-toggle-sound" class="btn-icon" title="Toggle Sound">
+            <svg id="icon-sound-on" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            </svg>
+          </button>
+        </div>
+      </main>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
