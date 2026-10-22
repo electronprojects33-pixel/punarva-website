@@ -54,12 +54,9 @@ class SorterApp {
   private currentFps: number = 0;
   private totalBottlesDetected: number = 0;
   private lastDetectionTime: number = 0;
-  private lastFrameAnalysisTime: number = 0;
   private animationFrameId: number | null = null;
-  private isReconnecting: boolean = false;
   private currentFacingMode: 'environment' | 'user' = APP_CONFIG.cameraFacingMode;
   private hasDetectedForCurrentTrigger: boolean = false;
-  private lastCheckRequestTime: number = 0;
   private lastBottleResult: GeminiVisionResult | null = null;
   private lastBottleResultAt: number = 0;
 
@@ -69,9 +66,8 @@ class SorterApp {
     this.setupListeners();
     this.initFirebase();
     this.initPWA();
-    this.setupGeminiLive();
     this.updateUIForState('DISARMED');
-    this.logDiagnostic('SYSTEM', 'AeroSort initialized with Google Gemini Live Vision.');
+    this.logDiagnostic('SYSTEM', 'AeroSort initialized with Google Gemini REST API.');
   }
 
   private bindDom() {
@@ -111,7 +107,12 @@ class SorterApp {
 
   // Centralized diagnostic logging for console & live mobile screen
   private logDiagnostic(tag: string, message: string, data?: any) {
-    const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const timeStr = new Date().toLocaleTimeString([], {
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
     const formatted = `[${timeStr}] [${tag}] ${message}`;
 
     if (data !== undefined) {
@@ -225,40 +226,138 @@ class SorterApp {
   }
 
   // Transitions state when RTDB object_detected attribute changes
-  private handleRtdbTriggerChange(triggered: boolean) {
+  private async handleRtdbTriggerChange(triggered: boolean) {
     this.updateRtdbIndicator();
 
     if (this.state === 'DISARMED') {
-      this.logDiagnostic('RTDB', `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}), awaiting system arming.`);
+      this.logDiagnostic(
+        'RTDB',
+        `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}), awaiting system arming.`
+      );
       return;
     }
 
     if (triggered) {
       this.hasDetectedForCurrentTrigger = false;
-      this.logDiagnostic('RTDB TRIGGER', `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Activating camera feed & Gemini Vision visual feed!`);
+      this.logDiagnostic(
+        'RTDB TRIGGER',
+        `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Capturing photo for Gemini REST API analysis...`
+      );
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
+
+      // Execute photo capture and Gemini REST check workflow
+      await this.captureAndAnalyzePhotoWorkflow();
     } else {
       this.hasDetectedForCurrentTrigger = false;
-      this.logDiagnostic('RTDB TRIGGER', `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Pausing Gemini Vision, camera in standby.`);
+      this.logDiagnostic(
+        'RTDB TRIGGER',
+        `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Ready for next object.`
+      );
       this.state = 'STANDBY';
       this.hudRenderer.clear();
       this.updateUIForState('STANDBY');
+      this.tickerClassNameEl.innerText = 'Standing by for next object...';
+      this.tickerScoreEl.innerText = '--';
+      this.tickerBarFillEl.style.width = '0%';
+      this.tickerBarFillEl.className = 'ticker-bar-fill';
+      this.tickerDotEl.className = 'ticker-dot';
+    }
+  }
+
+  /**
+   * Main workflow: captures a photo from the camera and queries Gemini REST API to verify if it's a bottle
+   */
+  private async captureAndAnalyzePhotoWorkflow() {
+    if (this.state === 'DISARMED' || !firebaseService.getTriggerState()) {
+      return;
+    }
+
+    if (geminiVision.isBusy()) {
+      this.logDiagnostic('GEMINI REST', 'Previous analysis still in progress, waiting...');
+      return;
+    }
+
+    // Indicate scanning state on UI
+    this.tickerClassNameEl.innerText = 'Capturing & Analyzing Photo...';
+    this.tickerScoreEl.innerText = '--';
+    this.tickerBarFillEl.style.width = '50%';
+    this.tickerBarFillEl.className = 'ticker-bar-fill';
+    this.tickerDotEl.className = 'ticker-dot';
+    this.statLivePredictionEl.innerText = 'Analyzing...';
+    this.statLivePredictionEl.style.color = '#38bdf8';
+    this.tickerLogMsgEl.innerText = `[Workflow] Capturing photo for Gemini (${APP_CONFIG.geminiModel})...`;
+
+    // Wait a brief 250ms for the physical object to settle in front of the lens
+    await new Promise((r) => setTimeout(r, 250));
+
+    // Re-verify still armed and trigger is still true
+    if ((this.state as SorterState) === 'DISARMED' || !firebaseService.getTriggerState()) {
+      this.logDiagnostic('WORKFLOW', 'Trigger cleared before photo analysis, cancelled.');
+      return;
+    }
+
+    try {
+      const result = await geminiVision.analyzePhoto(this.videoEl);
+      this.statModelLatencyEl.innerText = `${result.inferenceMs}`;
+      const scorePct = Math.round(result.confidence * 100);
+
+      if (result.isPlasticBottle && result.confidence >= APP_CONFIG.confidenceThreshold) {
+        // PLASTIC BOTTLE CONFIRMED!
+        this.hasDetectedForCurrentTrigger = true;
+        this.lastBottleResult = result;
+        this.lastBottleResultAt = performance.now();
+
+        this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
+        this.statLivePredictionEl.style.color = '#059669';
+        this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
+        this.tickerScoreEl.innerText = `${scorePct}%`;
+        this.tickerBarFillEl.style.width = `${scorePct}%`;
+        this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
+        this.tickerDotEl.className = 'ticker-dot active-plastic';
+        this.tickerLogMsgEl.innerText = `[Gemini REST] Bottle verified (${scorePct}%): ${result.reason}`;
+
+        this.onBottleIdentified(result);
+      } else {
+        // NOT A PLASTIC BOTTLE
+        this.statLivePredictionEl.innerText = 'No Bottle';
+        this.statLivePredictionEl.style.color = '#0284c7';
+        this.tickerClassNameEl.innerText = result.isPlasticBottle
+          ? `Low Confidence (${scorePct}%)`
+          : 'Not a Plastic Bottle';
+        this.tickerScoreEl.innerText = `${scorePct}%`;
+        this.tickerBarFillEl.style.width = '0%';
+        this.tickerBarFillEl.className = 'ticker-bar-fill other';
+        this.tickerDotEl.className = 'ticker-dot active-other';
+        this.tickerLogMsgEl.innerText = `[Gemini REST] ${result.reason} (${result.inferenceMs}ms)`;
+        this.logDiagnostic(
+          'GEMINI REST',
+          `❌ Object is NOT a bottle (${scorePct}% confidence). Reason: "${result.reason}"`
+        );
+      }
+    } catch (err: any) {
+      this.logDiagnostic('GEMINI ERROR', `Photo analysis failed: ${err.message || err}`);
+      this.statLivePredictionEl.innerText = 'API Error';
+      this.statLivePredictionEl.style.color = '#ef4444';
+      this.tickerClassNameEl.innerText = 'Analysis Failed';
+      this.tickerLogMsgEl.innerText = `[Error] ${err.message || err}`;
     }
   }
 
   // Arm the system (requests camera, wake lock, checks Gemini API key)
   public async armSystem() {
-    // Check if Gemini API key is configured
     if (!geminiVision.hasApiKey()) {
-      this.logDiagnostic('GEMINI ERROR', 'Gemini API key is missing. Please add your key to GEMINI_API_KEY in src/config.ts or .env');
+      this.logDiagnostic(
+        'GEMINI ERROR',
+        'Gemini API key is missing. Please add your key to GEMINI_API_KEY in src/config.ts or .env'
+      );
       alert('Please set your Gemini API key in src/config.ts or .env before arming.');
       return;
     }
 
     this.btnArmStageEl.disabled = true;
-    this.logDiagnostic('SYSTEM', 'Arming system: starting camera feed and connecting Gemini Live...');
+    this.logDiagnostic('SYSTEM', 'Arming system: starting camera feed...');
 
     try {
       // 1. Acquire Screen Wake Lock
@@ -267,13 +366,6 @@ class SorterApp {
       // 2. Start Camera
       await this.startCamera();
 
-      // 3. Open the Gemini Live WebSocket session
-      try {
-        await geminiVision.connect();
-      } catch (e: any) {
-        this.logDiagnostic('GEMINI LIVE', `Initial connection failed (${e.message || e}); will retry while scanning.`);
-      }
-
       soundEffects.playArmedChime();
 
       // Check if RTDB trigger is already true
@@ -281,6 +373,8 @@ class SorterApp {
         this.state = 'SCANNING';
         this.updateUIForState('SCANNING');
         this.logDiagnostic('SYSTEM', 'System ARMED & active (RTDB signal already ON)');
+        // Trigger workflow immediately
+        this.captureAndAnalyzePhotoWorkflow();
       } else {
         // Armed, but signal hasn't arrived: show Standby shutter screen
         this.state = 'STANDBY';
@@ -290,7 +384,7 @@ class SorterApp {
 
       this.updateRtdbIndicator();
 
-      // Start continuous frame visual feed pipeline
+      // Start continuous HUD rendering loop
       this.startFramePipeline();
     } catch (err: any) {
       this.logDiagnostic('ERROR', `Failed to arm system: ${err.message || err}`);
@@ -304,7 +398,6 @@ class SorterApp {
   // Disarms camera and releases resources
   public disarmSystem() {
     this.state = 'DISARMED';
-    geminiVision.disconnect();
     this.lastBottleResult = null;
     soundEffects.playDisarmSound();
     wakeLockManager.releaseLock();
@@ -330,7 +423,7 @@ class SorterApp {
     this.tickerDotEl.className = 'ticker-dot';
 
     this.updateUIForState('DISARMED');
-    this.logDiagnostic('SYSTEM', 'System DISARMED. Camera and Gemini Vision stopped.');
+    this.logDiagnostic('SYSTEM', 'System DISARMED. Camera stopped.');
   }
 
   private async startCamera() {
@@ -360,69 +453,7 @@ class SorterApp {
     this.logDiagnostic('CAMERA', `Camera stream running (${this.currentFacingMode})`);
   }
 
-  // Wires Gemini Live (WebSocket) callbacks to the UI and Firestore actions
-  private setupGeminiLive() {
-    geminiVision.onStatus = (msg) => this.logDiagnostic('GEMINI LIVE', msg);
-
-    geminiVision.onClose = (reason) => {
-      this.logDiagnostic('GEMINI LIVE', reason);
-    };
-
-    geminiVision.onNoBottle = (result) => {
-      if (this.state !== 'SCANNING' || this.hasDetectedForCurrentTrigger) return;
-      this.statModelLatencyEl.innerText = `${result.inferenceMs}`;
-      this.statLivePredictionEl.innerText = 'No Bottle';
-      this.statLivePredictionEl.style.color = '#0284c7';
-      this.tickerClassNameEl.innerText = 'No Bottle';
-      this.tickerScoreEl.innerText = '--';
-      this.tickerBarFillEl.style.width = '0%';
-      this.tickerBarFillEl.className = 'ticker-bar-fill other';
-      this.tickerDotEl.className = 'ticker-dot active-other';
-      this.tickerLogMsgEl.innerText = `[Gemini Live] No plastic bottle in view (${result.inferenceMs}ms)`;
-    };
-
-    geminiVision.onDetection = (result) => {
-      if ((this.state !== 'SCANNING' && this.state !== 'DETECTED') || this.hasDetectedForCurrentTrigger) return;
-
-      const scorePct = Math.round(result.confidence * 100);
-      this.statModelLatencyEl.innerText = `${result.inferenceMs}`;
-
-      if (result.confidence < APP_CONFIG.confidenceThreshold) {
-        this.logDiagnostic('GEMINI LIVE', `Bottle reported but confidence ${scorePct}% is below threshold, ignoring.`);
-        return;
-      }
-
-      this.hasDetectedForCurrentTrigger = true;
-      this.lastBottleResult = result;
-      this.lastBottleResultAt = performance.now();
-
-      this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
-      this.statLivePredictionEl.style.color = '#059669';
-      this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
-      this.tickerScoreEl.innerText = `${scorePct}%`;
-      this.tickerBarFillEl.style.width = `${scorePct}%`;
-      this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
-      this.tickerDotEl.className = 'ticker-dot active-plastic';
-
-      this.onBottleIdentified(result);
-    };
-  }
-
-  // Re-opens the Live WebSocket session if it dropped while scanning
-  private async ensureGeminiConnection() {
-    if (this.isReconnecting || geminiVision.isConnected()) return;
-    this.isReconnecting = true;
-    try {
-      await geminiVision.connect();
-    } catch (err: any) {
-      this.logDiagnostic('GEMINI LIVE', `Connect failed: ${err.message || err}. Retrying...`);
-      await new Promise((r) => setTimeout(r, 2000));
-    } finally {
-      this.isReconnecting = false;
-    }
-  }
-
-  // Real-time camera pipeline: streams frames to Gemini Live while object_detected == true
+  // Continuous HUD rendering pipeline
   private startFramePipeline() {
     const loop = (timestamp: number) => {
       this.calculateFps(timestamp);
@@ -436,28 +467,8 @@ class SorterApp {
         this.hudRenderer.drawScanningGuide(!this.hasDetectedForCurrentTrigger);
 
         // Keep the detection banner visible for a few seconds after a bottle is confirmed
-        const showBanner = this.lastBottleResult && performance.now() - this.lastBottleResultAt < 3000;
+        const showBanner = this.lastBottleResult && performance.now() - this.lastBottleResultAt < 3500;
         this.hudRenderer.renderGeminiVisionHUD(showBanner ? this.lastBottleResult : null);
-
-        // Stream only while no bottle has been counted for this signal (saves tokens)
-        if (!this.hasDetectedForCurrentTrigger) {
-          if (!geminiVision.isConnected()) {
-            this.ensureGeminiConnection();
-          } else {
-            const now = performance.now();
-            if (now - this.lastFrameAnalysisTime >= APP_CONFIG.frameIntervalMs) {
-              this.lastFrameAnalysisTime = now;
-              const brightness = geminiVision.sendFrame(this.videoEl);
-
-              if (brightness >= 0 && brightness < 8) {
-                this.tickerLogMsgEl.innerText = '[Camera] Frame too dark, waiting for exposure...';
-              } else if (brightness >= 0 && now - this.lastCheckRequestTime >= APP_CONFIG.checkIntervalMs && !geminiVision.isBusy()) {
-                this.lastCheckRequestTime = now;
-                geminiVision.requestCheck();
-              }
-            }
-          }
-        }
       }
 
       this.animationFrameId = requestAnimationFrame(loop);
@@ -466,7 +477,7 @@ class SorterApp {
     this.animationFrameId = requestAnimationFrame(loop);
   }
 
-  // Triggered when plastic bottle is verified by Gemini Live Vision
+  // Triggered when plastic bottle is verified by Gemini REST API
   private onBottleIdentified(result: GeminiVisionResult) {
     const now = performance.now();
     const timeSinceLast = now - this.lastDetectionTime;
@@ -475,7 +486,9 @@ class SorterApp {
     // Check debounce / cooldown window
     if (timeSinceLast < APP_CONFIG.cooldownMs) {
       const remainingMs = Math.round(APP_CONFIG.cooldownMs - timeSinceLast);
-      console.warn(`⏳ [COOLDOWN ACTIVE] Bottle verified (${scorePct}%), but cooldown has ${remainingMs}ms left.`);
+      console.warn(
+        `⏳ [COOLDOWN ACTIVE] Bottle verified (${scorePct}%), but cooldown has ${remainingMs}ms left.`
+      );
       return;
     }
 
@@ -530,11 +543,9 @@ class SorterApp {
     this.stateTextEl.innerText = st;
 
     if (st === 'DISARMED') {
-      // 1. Allow scrolling down to the reset button only when disarmed
       this.scrollableContainerEl.classList.remove('locked');
       this.adminResetSectionEl.classList.remove('hidden-when-armed');
 
-      // 2. Show Disarmed overlay, hide Standby overlay
       this.stageOverlayEl.classList.remove('hidden');
       this.overlayDisarmedContentEl.classList.remove('hidden');
       this.overlayStandbyContentEl.classList.add('hidden');
@@ -542,12 +553,10 @@ class SorterApp {
       this.btnToggleArmLabel.innerText = 'Arm System';
       this.btnToggleArmEl.className = 'btn btn-primary btn-pill';
     } else if (st === 'STANDBY') {
-      // Pin to top, lock scrolling so reset button cannot be reached during operation
       this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
       this.scrollableContainerEl.classList.add('locked');
       this.adminResetSectionEl.classList.add('hidden-when-armed');
 
-      // Show Standby screen masking camera feed until signal arrives
       this.stageOverlayEl.classList.remove('hidden');
       this.overlayDisarmedContentEl.classList.add('hidden');
       this.overlayStandbyContentEl.classList.remove('hidden');
@@ -555,12 +564,11 @@ class SorterApp {
       this.btnToggleArmLabel.innerText = 'Disarm';
       this.btnToggleArmEl.className = 'btn btn-danger btn-pill';
     } else if (st === 'SCANNING' || st === 'DETECTED') {
-      // Pin to top, lock scrolling
       this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
       this.scrollableContainerEl.classList.add('locked');
       this.adminResetSectionEl.classList.add('hidden-when-armed');
 
-      // SIGNAL IS HERE: Camera feed revealed! Shutter screen dissolves away smoothly
+      // SIGNAL IS HERE: Camera feed revealed!
       this.stageOverlayEl.classList.add('hidden');
 
       this.btnToggleArmLabel.innerText = 'Disarm';
@@ -571,7 +579,8 @@ class SorterApp {
   private initPWA() {
     if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js')
+        navigator.serviceWorker
+          .register('/sw.js')
           .then((reg) => console.log('Service Worker registered with scope:', reg.scope))
           .catch((err) => console.warn('Service Worker registration skipped/failed:', err));
       });

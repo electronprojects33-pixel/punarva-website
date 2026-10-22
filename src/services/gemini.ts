@@ -1,42 +1,35 @@
 import { APP_CONFIG } from '../config';
 import { GeminiVisionResult } from '../types';
 
-const WS_URL =
-  'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent';
+const REST_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-const SYSTEM_PROMPT = `
-You are the vision sensor of a plastic bottle counting machine, watching a live camera feed.
-When you are asked to check the camera, look at the most recent video frames.
-- If a real PLASTIC BOTTLE (water, soda, juice, detergent bottle, etc.) is clearly visible, call the function report_plastic_bottle exactly once.
-- Hands, motion blur, glare, empty background, cans, glass bottles, paper, cups or dark/black frames are NOT plastic bottles.
-- If there is no plastic bottle, answer with the single word "no". Never describe the scene.
+const DETECTION_PROMPT = `
+You are the vision sensor for an automated plastic bottle sorting machine.
+Examine this photo captured by the sorting camera.
+Determine whether a PLASTIC BOTTLE is present and clearly visible.
+
+Guidelines:
+- Plastic bottles include clear or colored PET water bottles, soda bottles, juice bottles, detergent/shampoo bottles, oil bottles, etc. (with or without caps/labels, crushed or intact).
+- NOT plastic bottles: empty background/conveyor, human hands, fingers, skin, metal cans, glass bottles, cups, cartons, paper, packaging, clothes, shadows, or blurry non-bottle items.
+- If unsure or no bottle is clearly seen, set is_plastic_bottle to false.
+
+Respond ONLY with a valid JSON object matching this schema:
+{
+  "is_plastic_bottle": boolean,
+  "confidence": number,
+  "reason": string
+}
 `.trim();
 
-const CHECK_PROMPT =
-  'Check the camera now. If a plastic bottle is clearly visible call report_plastic_bottle, otherwise say "no".';
-
-type Listener<T> = (payload: T) => void;
-
 /**
- * Google Gemini Live API client (WebSocket / BidiGenerateContent).
- * Streams camera frames as realtime video input and listens for a
- * `report_plastic_bottle` tool call from the model.
+ * Google Gemini Vision REST API client.
+ * Captures photos from the camera and sends them to Gemini generateContent.
  */
-export class GeminiLiveVisionService {
-  private ws: WebSocket | null = null;
-  private ready: boolean = false;
-  private connecting: Promise<void> | null = null;
+export class GeminiVisionService {
   private offscreenCanvas: HTMLCanvasElement;
   private offscreenCtx: CanvasRenderingContext2D | null;
-  private turnStartedAt: number = 0;
-  private toolCalledInTurn: boolean = false;
-  private awaitingTurn: boolean = false;
+  private isBusyState: boolean = false;
   private lastInferenceMs: number = 0;
-
-  public onDetection: Listener<GeminiVisionResult> | null = null;
-  public onNoBottle: Listener<GeminiVisionResult> | null = null;
-  public onStatus: Listener<string> | null = null;
-  public onClose: Listener<string> | null = null;
 
   constructor() {
     this.offscreenCanvas = document.createElement('canvas');
@@ -52,232 +45,157 @@ export class GeminiLiveVisionService {
     return key.length > 10 && !key.includes('YOUR_GEMINI_API_KEY');
   }
 
-  public isConnected(): boolean {
-    return this.ready && !!this.ws && this.ws.readyState === WebSocket.OPEN;
-  }
-
   public isBusy(): boolean {
-    if (this.awaitingTurn && performance.now() - this.turnStartedAt > 10000) {
-      console.warn('⚠️ [GEMINI LIVE] Turn timed out, releasing.');
-      this.awaitingTurn = false;
-    }
-    return this.awaitingTurn;
+    return this.isBusyState;
   }
 
   public getInferenceLatency(): number {
     return this.lastInferenceMs;
   }
 
-  // Opens the Live API WebSocket session and resolves once setupComplete is received
-  public connect(): Promise<void> {
-    if (this.isConnected()) return Promise.resolve();
-    if (this.connecting) return this.connecting;
-
-    this.connecting = new Promise<void>((resolve, reject) => {
-      const model = APP_CONFIG.geminiModel;
-      console.log(`🔌 [GEMINI LIVE] Connecting WebSocket (model: ${model})...`);
-
-      const ws = new WebSocket(`${WS_URL}?key=${this.getApiKey()}`);
-      this.ws = ws;
-      let settled = false;
-
-      ws.onopen = () => {
-        ws.send(
-          JSON.stringify({
-            setup: {
-              model: `models/${model}`,
-              generationConfig: { responseModalities: ['AUDIO'] },
-              contextWindowCompression: { slidingWindow: {} },
-              systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-              tools: [
-                {
-                  functionDeclarations: [
-                    {
-                      name: 'report_plastic_bottle',
-                      description: 'Call when a real plastic bottle is clearly visible in the camera feed.',
-                      parameters: {
-                        type: 'OBJECT',
-                        properties: {
-                          confidence: { type: 'NUMBER', description: 'Confidence between 0.0 and 1.0' },
-                          reason: { type: 'STRING', description: 'Very short description of the bottle seen' }
-                        },
-                        required: ['confidence']
-                      }
-                    }
-                  ]
-                }
-              ]
-            }
-          })
-        );
-      };
-
-      ws.onmessage = async (event) => {
-        let raw: string;
-        try {
-          raw = typeof event.data === 'string' ? event.data : await (event.data as Blob).text();
-        } catch {
-          return;
-        }
-
-        let msg: any;
-        try {
-          msg = JSON.parse(raw);
-        } catch {
-          return;
-        }
-
-        if (msg.setupComplete) {
-          this.ready = true;
-          this.connecting = null;
-          console.log('✅ [GEMINI LIVE] Session ready');
-          this.onStatus?.('Gemini Live connected');
-          if (!settled) {
-            settled = true;
-            resolve();
-          }
-          return;
-        }
-
-        if (msg.toolCall?.functionCalls) {
-          for (const call of msg.toolCall.functionCalls) {
-            if (call.name === 'report_plastic_bottle') {
-              this.toolCalledInTurn = true;
-              const confidence =
-                typeof call.args?.confidence === 'number' ? call.args.confidence : 0.9;
-              const reason: string = call.args?.reason || 'Plastic bottle detected';
-              const result = this.buildResult(true, confidence, reason);
-              console.log('🍾 [GEMINI LIVE] Tool call report_plastic_bottle', call.args);
-              this.onDetection?.(result);
-            }
-          }
-          // Acknowledge tool calls so the model can continue
-          this.send({
-            toolResponse: {
-              functionResponses: msg.toolCall.functionCalls.map((c: any) => ({
-                id: c.id,
-                name: c.name,
-                response: { result: 'recorded' }
-              }))
-            }
-          });
-          return;
-        }
-
-        if (msg.serverContent?.turnComplete) {
-          if (this.awaitingTurn && !this.toolCalledInTurn) {
-            const result = this.buildResult(false, 0, 'No plastic bottle in view');
-            console.log(`👁️ [GEMINI LIVE] No bottle (${result.inferenceMs}ms)`);
-            this.onNoBottle?.(result);
-          }
-          this.awaitingTurn = false;
-          this.toolCalledInTurn = false;
-        }
-      };
-
-      ws.onerror = () => {
-        console.error('❌ [GEMINI LIVE] WebSocket error');
-        if (!settled) {
-          settled = true;
-          this.connecting = null;
-          reject(new Error('WebSocket connection failed'));
-        }
-      };
-
-      ws.onclose = (event) => {
-        const reason = `Gemini Live closed (${event.code}) ${event.reason || ''}`.trim();
-        console.warn(`🔌 [GEMINI LIVE] ${reason}`);
-        this.ready = false;
-        this.awaitingTurn = false;
-        this.connecting = null;
-        if (this.ws === ws) this.ws = null;
-        if (!settled) {
-          settled = true;
-          reject(new Error(reason));
-        }
-        this.onClose?.(reason);
-      };
-    });
-
-    return this.connecting;
-  }
-
-  public disconnect() {
-    if (this.ws) {
-      this.ws.onclose = null;
-      try {
-        this.ws.close();
-      } catch {
-        /* ignore */
-      }
+  /**
+   * Captures a photo from the HTMLVideoElement.
+   * Checks average frame brightness to prevent sending black/unexposed frames.
+   * If the frame is too dark, retries with short delays up to maxRetries.
+   */
+  public async capturePhoto(
+    video: HTMLVideoElement,
+    maxRetries: number = 3
+  ): Promise<{ base64Data: string; brightness: number }> {
+    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) {
+      throw new Error('Camera video stream is not ready for capture');
     }
-    this.ws = null;
-    this.ready = false;
-    this.connecting = null;
-    this.awaitingTurn = false;
-    this.toolCalledInTurn = false;
-  }
 
-  // Captures a frame, streams it as realtime video. Returns average brightness (0-255) or -1 if no frame.
-  public sendFrame(video: HTMLVideoElement): number {
-    if (!this.isConnected() || !this.offscreenCtx) return -1;
-    if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return -1;
+    const targetW = 640;
+    const targetH = Math.round((video.videoHeight / video.videoWidth) * targetW) || 480;
 
-    const targetW = 480;
-    const targetH = Math.round((video.videoHeight / video.videoWidth) * targetW) || 360;
     if (this.offscreenCanvas.width !== targetW || this.offscreenCanvas.height !== targetH) {
       this.offscreenCanvas.width = targetW;
       this.offscreenCanvas.height = targetH;
     }
 
-    this.offscreenCtx.drawImage(video, 0, 0, targetW, targetH);
-
-    // Brightness check: skip black / not-yet-exposed camera frames
-    const sample = this.offscreenCtx.getImageData(0, 0, targetW, targetH).data;
-    let sum = 0;
-    let count = 0;
-    for (let i = 0; i < sample.length; i += 64) {
-      sum += (sample[i] + sample[i + 1] + sample[i + 2]) / 3;
-      count++;
+    if (!this.offscreenCtx) {
+      throw new Error('Canvas 2D context not available');
     }
-    const brightness = count ? sum / count : 0;
-    if (brightness < 8) return brightness;
 
-    const dataUrl = this.offscreenCanvas.toDataURL('image/jpeg', 0.7);
+    let brightness = 0;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      this.offscreenCtx.drawImage(video, 0, 0, targetW, targetH);
+      const imgData = this.offscreenCtx.getImageData(0, 0, targetW, targetH).data;
+
+      let sum = 0;
+      let count = 0;
+      for (let i = 0; i < imgData.length; i += 64) {
+        sum += (imgData[i] + imgData[i + 1] + imgData[i + 2]) / 3;
+        count++;
+      }
+      brightness = count ? sum / count : 0;
+
+      // If brightness is reasonable (> 12) or last attempt, accept
+      if (brightness >= 12 || attempt === maxRetries) {
+        break;
+      }
+      // Wait briefly for camera sensor auto-exposure to adjust
+      await new Promise((r) => setTimeout(r, 200));
+    }
+
+    const dataUrl = this.offscreenCanvas.toDataURL('image/jpeg', 0.85);
     const comma = dataUrl.indexOf(',');
-    if (comma === -1) return brightness;
+    const base64Data = comma !== -1 ? dataUrl.substring(comma + 1) : dataUrl;
 
-    this.send({
-      realtimeInput: { video: { data: dataUrl.substring(comma + 1), mimeType: 'image/jpeg' } }
-    });
-    return brightness;
+    return { base64Data, brightness };
   }
 
-  // Asks the model to evaluate the most recent frames
-  public requestCheck() {
-    if (!this.isConnected() || this.awaitingTurn) return;
-    this.awaitingTurn = true;
-    this.toolCalledInTurn = false;
-    this.turnStartedAt = performance.now();
-    this.send({ realtimeInput: { text: CHECK_PROMPT } });
-  }
+  /**
+   * Captures photo from camera video element and sends to Gemini REST API generateContent.
+   */
+  public async analyzePhoto(video: HTMLVideoElement): Promise<GeminiVisionResult> {
+    const key = this.getApiKey();
+    if (!key) {
+      throw new Error('Gemini API key is not configured');
+    }
 
-  private buildResult(isPlasticBottle: boolean, confidence: number, reason: string): GeminiVisionResult {
-    this.lastInferenceMs = Math.round(performance.now() - this.turnStartedAt);
-    return {
-      isPlasticBottle,
-      confidence,
-      reason,
-      inferenceMs: this.lastInferenceMs,
-      timestamp: Date.now()
-    };
-  }
+    this.isBusyState = true;
+    const startTime = performance.now();
 
-  private send(payload: unknown) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(payload));
+    try {
+      // 1. Capture the photo
+      const { base64Data, brightness } = await this.capturePhoto(video);
+      console.log(
+        `📸 [GEMINI REST] Photo captured (${this.offscreenCanvas.width}x${this.offscreenCanvas.height}, avg brightness: ${Math.round(brightness)})`
+      );
+
+      // 2. Call Gemini REST API generateContent
+      const model = APP_CONFIG.geminiModel;
+      const url = `${REST_BASE_URL}/${model}:generateContent?key=${key}`;
+
+      const payload = {
+        contents: [
+          {
+            parts: [
+              { text: DETECTION_PROMPT },
+              {
+                inline_data: {
+                  mime_type: 'image/jpeg',
+                  data: base64Data
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      };
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error('❌ [GEMINI REST] API error response:', res.status, errorText);
+        throw new Error(`Gemini API returned ${res.status}: ${errorText}`);
+      }
+
+      const json = await res.json();
+      const rawText = json.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (!rawText) {
+        throw new Error('Empty response received from Gemini REST API');
+      }
+
+      let parsed: { is_plastic_bottle?: boolean; confidence?: number; reason?: string } = {};
+      try {
+        parsed = JSON.parse(rawText);
+      } catch {
+        console.warn('⚠️ [GEMINI REST] JSON parse fallback on raw output:', rawText);
+        const isBottleMatch = rawText.match(/"is_plastic_bottle"\s*:\s*(true|false)/i);
+        parsed = {
+          is_plastic_bottle: isBottleMatch ? isBottleMatch[1].toLowerCase() === 'true' : false,
+          confidence: 0.8,
+          reason: rawText.substring(0, 60)
+        };
+      }
+
+      this.lastInferenceMs = Math.round(performance.now() - startTime);
+
+      const result: GeminiVisionResult = {
+        isPlasticBottle: Boolean(parsed.is_plastic_bottle),
+        confidence: typeof parsed.confidence === 'number' ? parsed.confidence : (parsed.is_plastic_bottle ? 0.9 : 0.1),
+        reason: parsed.reason || (parsed.is_plastic_bottle ? 'Plastic bottle identified' : 'No plastic bottle detected'),
+        inferenceMs: this.lastInferenceMs,
+        timestamp: Date.now()
+      };
+
+      console.log(`🤖 [GEMINI REST] Result in ${result.inferenceMs}ms:`, result);
+      return result;
+    } finally {
+      this.isBusyState = false;
     }
   }
 }
 
-export const geminiVision = new GeminiLiveVisionService();
+export const geminiVision = new GeminiVisionService();
