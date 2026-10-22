@@ -1,11 +1,11 @@
 import './style.css';
 import confetti from 'canvas-confetti';
 import { APP_CONFIG } from './config';
-import { ClassificationCategory, ClassificationResult, SorterState } from './types';
+import { GeminiVisionResult, SorterState } from './types';
 import { soundEffects } from './services/audio';
 import { wakeLockManager } from './services/wakelock';
 import { firebaseService } from './services/firebase';
-import { plasticClassifier } from './services/detector';
+import { geminiVision } from './services/gemini';
 import { HudRenderer } from './ui/hud';
 
 class SorterApp {
@@ -33,6 +33,14 @@ class SorterApp {
   private btnToggleSoundEl!: HTMLButtonElement;
   private pillRtdbEl!: HTMLElement;
   private pillWakeLockEl!: HTMLElement;
+  private pillGeminiStatusEl!: HTMLElement;
+
+  // Gemini Key Modal DOM
+  private geminiModalEl!: HTMLElement;
+  private inputGeminiKeyEl!: HTMLInputElement;
+  private btnSaveGeminiKeyEl!: HTMLButtonElement;
+  private btnCloseGeminiModalEl!: HTMLButtonElement;
+  private btnToggleKeyVisibilityEl!: HTMLButtonElement;
 
   // Telemetry DOM
   private statTotalBottlesEl!: HTMLElement;
@@ -54,7 +62,7 @@ class SorterApp {
   private currentFps: number = 0;
   private totalBottlesDetected: number = 0;
   private lastDetectionTime: number = 0;
-  private lastPeriodicLogTime: number = 0;
+  private lastFrameAnalysisTime: number = 0;
   private animationFrameId: number | null = null;
   private isProcessingFrame: boolean = false;
   private currentFacingMode: 'environment' | 'user' = APP_CONFIG.cameraFacingMode;
@@ -65,8 +73,9 @@ class SorterApp {
     this.setupListeners();
     this.initFirebase();
     this.initPWA();
+    this.updateGeminiStatusIndicator();
     this.updateUIForState('DISARMED');
-    this.logDiagnostic('SYSTEM', 'Application initialized. Awaiting user arming.');
+    this.logDiagnostic('SYSTEM', 'AeroSort initialized with Google Gemini Live Vision.');
   }
 
   private bindDom() {
@@ -88,12 +97,22 @@ class SorterApp {
     this.btnToggleSoundEl = document.getElementById('btn-toggle-sound') as HTMLButtonElement;
     this.pillRtdbEl = document.getElementById('pill-rtdb')!;
     this.pillWakeLockEl = document.getElementById('pill-wakelock')!;
+    this.pillGeminiStatusEl = document.getElementById('pill-gemini-status')!;
 
+    // Gemini Modal
+    this.geminiModalEl = document.getElementById('gemini-modal')!;
+    this.inputGeminiKeyEl = document.getElementById('input-gemini-key') as HTMLInputElement;
+    this.btnSaveGeminiKeyEl = document.getElementById('btn-save-gemini-key') as HTMLButtonElement;
+    this.btnCloseGeminiModalEl = document.getElementById('btn-close-gemini-modal') as HTMLButtonElement;
+    this.btnToggleKeyVisibilityEl = document.getElementById('btn-toggle-key-visibility') as HTMLButtonElement;
+
+    // Telemetry
     this.statTotalBottlesEl = document.getElementById('stat-total-bottles')!;
     this.statLivePredictionEl = document.getElementById('stat-live-prediction')!;
     this.statModelLatencyEl = document.getElementById('stat-model-latency')!;
     this.statStreamFpsEl = document.getElementById('stat-stream-fps')!;
 
+    // Live AI Ticker
     this.aiLiveTickerEl = document.getElementById('ai-live-ticker')!;
     this.tickerDotEl = document.getElementById('ticker-dot')!;
     this.tickerClassNameEl = document.getElementById('ticker-class-name')!;
@@ -116,6 +135,26 @@ class SorterApp {
     if (this.tickerLogMsgEl) {
       this.tickerLogMsgEl.innerText = formatted;
     }
+  }
+
+  private updateGeminiStatusIndicator() {
+    if (geminiVision.isReady()) {
+      this.pillGeminiStatusEl.innerText = 'ONLINE';
+      this.pillGeminiStatusEl.className = 'tel-val status-connected';
+    } else {
+      this.pillGeminiStatusEl.innerText = 'NO KEY';
+      this.pillGeminiStatusEl.className = 'tel-val status-waiting';
+    }
+  }
+
+  private openGeminiModal() {
+    this.inputGeminiKeyEl.value = geminiVision.getApiKey();
+    this.geminiModalEl.classList.remove('hidden');
+    setTimeout(() => this.inputGeminiKeyEl.focus(), 150);
+  }
+
+  private closeGeminiModal() {
+    this.geminiModalEl.classList.add('hidden');
   }
 
   private setupListeners() {
@@ -146,6 +185,32 @@ class SorterApp {
       soundEffects.setEnabled(this.audioEnabled);
       this.btnToggleSoundEl.style.opacity = this.audioEnabled ? '1' : '0.4';
       this.logDiagnostic('AUDIO', `Sound effects ${this.audioEnabled ? 'enabled' : 'muted'}`);
+    });
+
+    // Gemini API Key Config Pill click
+    const geminiPillWrap = document.getElementById('tel-gemini-item');
+    if (geminiPillWrap) {
+      geminiPillWrap.addEventListener('click', () => this.openGeminiModal());
+    }
+
+    // Modal controls
+    this.btnCloseGeminiModalEl.addEventListener('click', () => this.closeGeminiModal());
+    this.btnToggleKeyVisibilityEl.addEventListener('click', () => {
+      const isPass = this.inputGeminiKeyEl.type === 'password';
+      this.inputGeminiKeyEl.type = isPass ? 'text' : 'password';
+      this.btnToggleKeyVisibilityEl.innerText = isPass ? 'Hide' : 'Show';
+    });
+
+    this.btnSaveGeminiKeyEl.addEventListener('click', () => {
+      const enteredKey = this.inputGeminiKeyEl.value.trim();
+      if (!enteredKey) {
+        alert('Please enter a valid Gemini API key.');
+        return;
+      }
+      geminiVision.setApiKey(enteredKey);
+      this.updateGeminiStatusIndicator();
+      this.closeGeminiModal();
+      this.logDiagnostic('GEMINI', 'API Key configured successfully. Gemini Live Visual Feed ready!');
     });
 
     // Tap RTDB indicator to manually toggle object_detected signal for easy testing
@@ -227,22 +292,29 @@ class SorterApp {
     }
 
     if (triggered) {
-      this.logDiagnostic('RTDB TRIGGER', `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Activating camera feed & AI classification!`);
+      this.logDiagnostic('RTDB TRIGGER', `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Activating camera feed & Gemini Vision visual feed!`);
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
     } else {
-      this.logDiagnostic('RTDB TRIGGER', `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Pausing classification, camera in standby.`);
+      this.logDiagnostic('RTDB TRIGGER', `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Pausing Gemini Vision, camera in standby.`);
       this.state = 'STANDBY';
       this.hudRenderer.clear();
       this.updateUIForState('STANDBY');
     }
   }
 
-  // Arm the system (requests camera, wake lock, loads model)
+  // Arm the system (requests camera, wake lock, checks Gemini API key)
   public async armSystem() {
+    // Check if Gemini API key is configured
+    if (!geminiVision.isReady()) {
+      this.logDiagnostic('GEMINI WARNING', 'Gemini API key is required. Opening setup modal...');
+      this.openGeminiModal();
+      return;
+    }
+
     this.btnArmStageEl.disabled = true;
-    this.logDiagnostic('SYSTEM', 'Arming system: requesting camera and loading AI model...');
+    this.logDiagnostic('SYSTEM', 'Arming system: starting camera feed and engaging Gemini Vision...');
 
     try {
       // 1. Acquire Screen Wake Lock
@@ -250,17 +322,6 @@ class SorterApp {
 
       // 2. Start Camera
       await this.startCamera();
-
-      // 3. Load Teachable Machine Image Classifier
-      if (!plasticClassifier.isReady()) {
-        this.logDiagnostic('MODEL', `Loading TFLite model from ${APP_CONFIG.modelUrl}...`);
-        const modelRes = await plasticClassifier.initialize(APP_CONFIG.modelUrl, APP_CONFIG.labelsUrl);
-        if (!modelRes.success) {
-          this.logDiagnostic('MODEL WARNING', modelRes.message);
-        } else {
-          this.logDiagnostic('MODEL READY', 'Teachable Machine model loaded successfully!');
-        }
-      }
 
       soundEffects.playArmedChime();
 
@@ -277,8 +338,9 @@ class SorterApp {
       }
 
       this.updateRtdbIndicator();
+      this.updateGeminiStatusIndicator();
 
-      // Start continuous frame detection pipeline
+      // Start continuous frame visual feed pipeline
       this.startFramePipeline();
     } catch (err: any) {
       this.logDiagnostic('ERROR', `Failed to arm system: ${err.message || err}`);
@@ -316,7 +378,7 @@ class SorterApp {
     this.tickerDotEl.className = 'ticker-dot';
 
     this.updateUIForState('DISARMED');
-    this.logDiagnostic('SYSTEM', 'System DISARMED. Camera and AI stopped.');
+    this.logDiagnostic('SYSTEM', 'System DISARMED. Camera and Gemini Vision stopped.');
   }
 
   private async startCamera() {
@@ -346,82 +408,79 @@ class SorterApp {
     this.logDiagnostic('CAMERA', `Camera stream running (${this.currentFacingMode})`);
   }
 
-  // Real-time camera classification pipeline (pure image classification, no bounding boxes)
+  // Real-time camera visual feed pipeline powered by Google Gemini Vision
   private startFramePipeline() {
-    const loop = (timestamp: number) => {
+    const loop = async (timestamp: number) => {
       this.calculateFps(timestamp);
 
       if (this.videoEl.videoWidth > 0) {
         this.hudRenderer.syncSize(this.videoEl);
       }
 
-      // MODEL RUNS IN SCANNING / DETECTED (when object_detected == true)
+      // GEMINI RUNS IN SCANNING / DETECTED (when object_detected == true)
       if (this.state === 'SCANNING' || this.state === 'DETECTED') {
         this.hudRenderer.clear();
         this.hudRenderer.drawScanningGuide(true);
 
-        if (!this.isProcessingFrame && plasticClassifier.isReady()) {
+        const now = performance.now();
+        const timeSinceLastFrame = now - this.lastFrameAnalysisTime;
+
+        // Check throttle interval and ensure only one request is in-flight
+        if (!this.isProcessingFrame && geminiVision.isReady() && timeSinceLastFrame >= APP_CONFIG.feedIntervalMs) {
           this.isProcessingFrame = true;
+          this.lastFrameAnalysisTime = now;
 
-          const result: ClassificationResult | null = plasticClassifier.classifyFrame(this.videoEl, timestamp);
-          if (result) {
-            const { categories, topCategory, inferenceMs } = result;
+          try {
+            const result: GeminiVisionResult | null = await geminiVision.analyzeFrame(this.videoEl);
+            if (result) {
+              const { isPlasticBottle, confidence, reason, inferenceMs } = result;
+              const scorePct = Math.round(confidence * 100);
 
-            this.statModelLatencyEl.innerText = `${inferenceMs}`;
+              this.statModelLatencyEl.innerText = `${inferenceMs}`;
 
-            // Locate Plastic_Bottle category
-            const plasticCategory = categories.find((c) =>
-              c.categoryName.toLowerCase().includes('bottle') ||
-              c.categoryName.toLowerCase().includes('plastic')
-            ) || (topCategory.categoryName.toLowerCase().includes('plastic') ? topCategory : null);
+              // 1. Update on-screen telemetry prediction chip
+              if (isPlasticBottle) {
+                this.statLivePredictionEl.innerText = `Bottle ${scorePct}%`;
+                this.statLivePredictionEl.style.color = '#059669';
+              } else {
+                this.statLivePredictionEl.innerText = `No Bottle`;
+                this.statLivePredictionEl.style.color = '#0284c7';
+              }
 
-            const plasticScore = plasticCategory ? plasticCategory.score : 0;
-            const plasticPct = Math.round(plasticScore * 100);
-            const topPct = Math.round(topCategory.score * 100);
+              // 2. Update Live Diagnostics Ticker card
+              if (isPlasticBottle) {
+                this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
+                this.tickerScoreEl.innerText = `${scorePct}%`;
+                this.tickerBarFillEl.style.width = `${scorePct}%`;
+                this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
+                this.tickerDotEl.className = 'ticker-dot active-plastic';
+              } else {
+                this.tickerClassNameEl.innerText = 'No Bottle';
+                this.tickerScoreEl.innerText = `${scorePct}%`;
+                this.tickerBarFillEl.style.width = `${scorePct}%`;
+                this.tickerBarFillEl.className = 'ticker-bar-fill other';
+                this.tickerDotEl.className = 'ticker-dot active-other';
+              }
+              this.tickerLogMsgEl.innerText = `[Gemini Vision] ${reason}`;
 
-            // Is plastic bottle identified above confidence threshold?
-            const isBottleIdentified = plasticScore >= APP_CONFIG.confidenceThreshold;
+              // 3. Render HUD on canvas (viewfinder brackets + detection banner)
+              this.hudRenderer.renderGeminiVisionHUD(result);
 
-            // 1. Update on-screen telemetry prediction chip
-            const displayLabel = isBottleIdentified
-              ? `Bottle ${plasticPct}%`
-              : `${topCategory.categoryName.replace('_', ' ')} ${topPct}%`;
-            this.statLivePredictionEl.innerText = displayLabel;
-            this.statLivePredictionEl.style.color = isBottleIdentified ? '#059669' : '#0284c7';
+              // 4. Log periodically or on positive detection
+              console.log(
+                `👁️ [GEMINI LIVE FEED] [${inferenceMs}ms] Result: ${isPlasticBottle ? 'BOTTLE' : 'NO BOTTLE'} (${scorePct}%) | Reason: "${reason}"`
+              );
 
-            // 2. Update Live Diagnostics Ticker card
-            if (isBottleIdentified) {
-              this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
-              this.tickerScoreEl.innerText = `${plasticPct}%`;
-              this.tickerBarFillEl.style.width = `${plasticPct}%`;
-              this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
-              this.tickerDotEl.className = 'ticker-dot active-plastic';
-            } else {
-              this.tickerClassNameEl.innerText = topCategory.categoryName.replace('_', ' ');
-              this.tickerScoreEl.innerText = `${topPct}%`;
-              this.tickerBarFillEl.style.width = `${topPct}%`;
-              this.tickerBarFillEl.className = 'ticker-bar-fill other';
-              this.tickerDotEl.className = 'ticker-dot active-other';
+              // 5. Handle verified plastic bottle detection
+              if (isPlasticBottle && confidence >= APP_CONFIG.confidenceThreshold) {
+                this.onBottleIdentified(result);
+              }
             }
-
-            // 3. Render HUD on canvas (viewfinder brackets + detection banner, no bounding boxes)
-            this.hudRenderer.renderClassificationHUD(result, isBottleIdentified, plasticPct);
-
-            // 4. Periodic diagnostic log to avoid console flood (every 1.2s during normal scanning)
-            const now = performance.now();
-            if (now - this.lastPeriodicLogTime > 1200) {
-              this.lastPeriodicLogTime = now;
-              const categoriesSummary = categories.map((c) => `${c.categoryName}: ${(c.score * 100).toFixed(1)}%`).join(' | ');
-              console.log(`🔍 [AI CLASSIFIER] [${inferenceMs}ms] ${categoriesSummary} (Threshold: ${APP_CONFIG.confidenceThreshold * 100}%)`);
-            }
-
-            // 5. Handle Plastic Bottle Detection
-            if (isBottleIdentified) {
-              this.onBottleIdentified(plasticCategory || topCategory, inferenceMs);
-            }
+          } catch (feedErr) {
+            console.error('Gemini frame feed error:', feedErr);
+          } finally {
+            this.isProcessingFrame = false;
           }
-
-          this.isProcessingFrame = false;
         }
       }
 
@@ -431,19 +490,16 @@ class SorterApp {
     this.animationFrameId = requestAnimationFrame(loop);
   }
 
-  // Triggered when plastic bottle is classified
-  private onBottleIdentified(category: ClassificationCategory, inferenceMs: number) {
+  // Triggered when plastic bottle is verified by Gemini Live Vision
+  private onBottleIdentified(result: GeminiVisionResult) {
     const now = performance.now();
     const timeSinceLast = now - this.lastDetectionTime;
-    const scorePct = Math.round(category.score * 100);
+    const scorePct = Math.round(result.confidence * 100);
 
     // Check debounce / cooldown window
     if (timeSinceLast < APP_CONFIG.cooldownMs) {
       const remainingMs = Math.round(APP_CONFIG.cooldownMs - timeSinceLast);
-      // Helpful log for why increment wasn't sent yet
-      if (Math.random() < 0.2) { // sample to avoid console log spam
-        console.warn(`⏳ [COOLDOWN ACTIVE] Plastic bottle detected (${scorePct}%), but cooldown has ${remainingMs}ms left.`);
-      }
+      console.warn(`⏳ [COOLDOWN ACTIVE] Bottle verified (${scorePct}%), but cooldown has ${remainingMs}ms left.`);
       return;
     }
 
@@ -451,8 +507,8 @@ class SorterApp {
 
     // Verbose log for successful detection
     this.logDiagnostic(
-      'DETECTION RESULT',
-      `🍾 PLASTIC BOTTLE CONFIRMED! Score: ${scorePct}% (Threshold: ${Math.round(APP_CONFIG.confidenceThreshold * 100)}%) | Latency: ${inferenceMs}ms -> Incrementing Firestore bottles_count (+1)...`
+      'GEMINI DETECTION',
+      `🍾 PLASTIC BOTTLE CONFIRMED! (${scorePct}%) Reason: "${result.reason}" | Latency: ${result.inferenceMs}ms -> Dispatching Firestore increment (+1)...`
     );
 
     // Audio chime
@@ -467,7 +523,7 @@ class SorterApp {
     });
 
     // Non-blocking Firestore update: increments bottles_count by 1
-    firebaseService.recordBottleDetection(category);
+    firebaseService.recordBottleDetection(result);
 
     // Briefly pulse status badge to DETECTED
     this.state = 'DETECTED';

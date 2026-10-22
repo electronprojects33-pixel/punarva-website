@@ -20,7 +20,7 @@ import {
   Firestore
 } from 'firebase/firestore';
 import { FIREBASE_CONFIG, APP_CONFIG } from '../config';
-import { BottleDetectionEvent, ClassificationCategory } from '../types';
+import { BottleDetectionEvent, GeminiVisionResult } from '../types';
 
 export class FirebaseService {
   private app: FirebaseApp | null = null;
@@ -138,18 +138,19 @@ export class FirebaseService {
   }
 
   // Non-blocking fire-and-forget write to Firestore: updates bottles_count
-  public recordBottleDetection(classification: ClassificationCategory): BottleDetectionEvent {
+  public recordBottleDetection(result: GeminiVisionResult): BottleDetectionEvent {
     const startTime = performance.now();
     const eventId = 'det_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
     const eventTime = new Date();
-    const scorePct = Math.round(classification.score * 100);
+    const scorePct = Math.round(result.confidence * 100);
 
     const detectionRecord: BottleDetectionEvent = {
       id: eventId,
       timestamp: Date.now(),
       formattedTime: eventTime.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' }),
-      category: classification.categoryName,
+      category: 'Plastic_Bottle',
       confidence: scorePct,
+      reason: result.reason,
       status: this.firestore ? 'SYNCED' : 'PENDING',
       latencyMs: 0
     };
@@ -166,8 +167,9 @@ export class FirebaseService {
     setDoc(statsDocRef, {
       bottles_count: increment(1),
       last_detected_at: serverTimestamp(),
-      last_category: classification.categoryName,
-      last_confidence: classification.score
+      last_category: 'Plastic_Bottle',
+      last_confidence: result.confidence,
+      last_reason: result.reason
     }, { merge: true })
       .then(() => {
         detectionRecord.latencyMs = Math.round(performance.now() - startTime);

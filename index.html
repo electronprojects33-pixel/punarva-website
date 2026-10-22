@@ -60,6 +60,10 @@
             <span class="tel-label">RTDB</span>
             <span id="pill-rtdb" class="tel-val status-waiting">WAITING</span>
           </div>
+          <div class="tel-item" id="tel-gemini-item" style="cursor: pointer" title="Click to configure Gemini API Key">
+            <span class="tel-label">Gemini</span>
+            <span id="pill-gemini-status" class="tel-val status-waiting">KEY</span>
+          </div>
           <div class="tel-item">
             <span class="tel-label">Lock</span>
             <span id="pill-wakelock" class="tel-val">OFF</span>
@@ -185,6 +189,40 @@
             </button>
           </div>
         </section>
+      </div>
+    </div>
+
+    <!-- Google Gemini API Key Modal -->
+    <div id="gemini-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-header">
+          <div class="modal-title-row">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0284c7" stroke-width="2">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
+            </svg>
+            <h3>Google Gemini Live Vision</h3>
+          </div>
+          <button id="btn-close-gemini-modal" class="btn-icon" aria-label="Close">&times;</button>
+        </div>
+        <p class="modal-desc">
+          Enter your Google Gemini API key to activate real-time multimodal visual feed classification:
+        </p>
+        <div class="modal-input-group">
+          <input 
+            type="password" 
+            id="input-gemini-key" 
+            placeholder="AIzaSy..." 
+            autocomplete="off" 
+            spellcheck="false"
+          />
+          <button id="btn-toggle-key-visibility" type="button" class="btn-text">Show</button>
+        </div>
+        <div class="modal-hint">
+          Get a free key instantly from <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>.
+        </div>
+        <div class="modal-actions">
+          <button id="btn-save-gemini-key" class="btn btn-primary" style="width: 100%">Save & Activate Gemini Feed</button>
+        </div>
       </div>
     </div>
 

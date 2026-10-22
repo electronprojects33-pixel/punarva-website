@@ -21,13 +21,14 @@ export const APP_CONFIG = {
   firestoreCollection: import.meta.env.VITE_FIRESTORE_COLLECTION || "bottle_detections",
   firestoreStatsDoc: "summary", // Document holding bottles_count attribute
 
-  // Model & Teachable Machine Detection Settings
-  modelUrl: "/models/model_unquant.tflite", // Your custom Teachable Machine model
-  labelsUrl: "/models/labels.txt",          // Your Teachable Machine labels
-  confidenceThreshold: 0.65,                // 65% minimum confidence
-  cooldownMs: 1200,                         // Debounce interval between count updates
+  // Google Gemini Vision Live Feed Settings
+  geminiApiKey: import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('gemini_api_key') || "",
+  geminiModel: import.meta.env.VITE_GEMINI_MODEL || "gemini-1.5-flash",
+  confidenceThreshold: 0.70, // 70% minimum confidence
+  cooldownMs: 1500,          // Debounce interval between count updates
+  feedIntervalMs: 350,       // Interval between live visual feed checks
 
   // Camera Settings
   cameraFacingMode: "environment" as "environment" | "user", // "environment" for rear camera
-  enableAudio: true                              // Synthesized audio chime on detection
+  enableAudio: true          // Synthesized audio chime on detection
 };

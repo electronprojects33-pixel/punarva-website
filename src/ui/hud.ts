@@ -1,4 +1,4 @@
-import { ClassificationCategory, ClassificationResult } from '../types';
+import { GeminiVisionResult } from '../types';
 
 export class HudRenderer {
   private canvas: HTMLCanvasElement;
@@ -81,10 +81,10 @@ export class HudRenderer {
     const y2 = h - margin;
 
     this.ctx.save();
-    this.ctx.strokeStyle = isHighlighted ? '#10b981' : 'rgba(255, 255, 255, 0.4)';
+    this.ctx.strokeStyle = isHighlighted ? '#10b981' : 'rgba(255, 255, 255, 0.45)';
     this.ctx.lineWidth = isHighlighted ? 3.5 : 2;
     this.ctx.shadowColor = isHighlighted ? 'rgba(16, 185, 129, 0.8)' : 'transparent';
-    this.ctx.shadowBlur = isHighlighted ? 12 : 0;
+    this.ctx.shadowBlur = isHighlighted ? 14 : 0;
 
     this.ctx.beginPath();
     // Top-left
@@ -108,33 +108,31 @@ export class HudRenderer {
     this.ctx.restore();
   }
 
-  // Render on-canvas Classification HUD: status banner and confidence readouts (NO bounding boxes)
-  public renderClassificationHUD(
-    result: ClassificationResult,
-    isPlasticBottle: boolean,
-    confidencePct: number
-  ) {
+  // Render on-canvas Gemini Vision HUD: status banner and detection reason
+  public renderGeminiVisionHUD(result: GeminiVisionResult | null) {
     const w = this.canvas.width;
     const h = this.canvas.height;
     if (w === 0 || h === 0) return;
 
     const ctx = this.ctx;
+    const isBottle = result ? result.isPlasticBottle : false;
+
     ctx.save();
 
     // 1. Draw Viewfinder Frame Reticles
-    this.drawViewfinderBrackets(isPlasticBottle);
+    this.drawViewfinderBrackets(isBottle);
 
     // 2. Detection Banner when Plastic Bottle is identified
-    if (isPlasticBottle) {
+    if (result && isBottle) {
       const bannerW = Math.min(320, w - 32);
-      const bannerH = 46;
+      const bannerH = 48;
       const bannerX = (w - bannerW) / 2;
       const bannerY = 24;
 
       // Outer glow & emerald backdrop
       ctx.shadowColor = 'rgba(16, 185, 129, 0.6)';
       ctx.shadowBlur = 16;
-      ctx.fillStyle = 'rgba(6, 78, 59, 0.92)';
+      ctx.fillStyle = 'rgba(6, 78, 59, 0.94)';
       ctx.beginPath();
       ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 12);
       ctx.fill();
@@ -146,14 +144,16 @@ export class HudRenderer {
       ctx.shadowBlur = 0;
 
       // Banner text
-      ctx.font = 'bold 14px "JetBrains Mono", monospace';
+      const scorePct = Math.round(result.confidence * 100);
+      ctx.font = 'bold 13px "JetBrains Mono", monospace';
       ctx.fillStyle = '#6ee7b7';
       ctx.textAlign = 'center';
-      ctx.fillText(`PLASTIC BOTTLE DETECTED`, bannerX + bannerW / 2, bannerY + 20);
+      ctx.fillText(`✨ PLASTIC BOTTLE DETECTED`, bannerX + bannerW / 2, bannerY + 20);
 
-      ctx.font = '600 12px "JetBrains Mono", monospace';
+      ctx.font = '500 11px "JetBrains Mono", monospace';
       ctx.fillStyle = '#ffffff';
-      ctx.fillText(`Confidence: ${confidencePct}%`, bannerX + bannerW / 2, bannerY + 37);
+      const shortReason = result.reason.length > 34 ? result.reason.substring(0, 32) + '...' : result.reason;
+      ctx.fillText(`${scorePct}% • ${shortReason}`, bannerX + bannerW / 2, bannerY + 38);
     }
 
     ctx.restore();

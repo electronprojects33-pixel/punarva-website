@@ -1,2 +1,0 @@
-0 Plastic_Bottle
-1 Other_Object
