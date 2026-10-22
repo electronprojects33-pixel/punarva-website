@@ -58,6 +58,8 @@ class SorterApp {
   private animationFrameId: number | null = null;
   private isProcessingFrame: boolean = false;
   private currentFacingMode: 'environment' | 'user' = APP_CONFIG.cameraFacingMode;
+  private hasDetectedForCurrentTrigger: boolean = false;
+  private checkCountForCurrentTrigger: number = 0;
 
   constructor() {
     this.bindDom();
@@ -229,11 +231,15 @@ class SorterApp {
     }
 
     if (triggered) {
+      this.hasDetectedForCurrentTrigger = false;
+      this.checkCountForCurrentTrigger = 0;
       this.logDiagnostic('RTDB TRIGGER', `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Activating camera feed & Gemini Vision visual feed!`);
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
     } else {
+      this.hasDetectedForCurrentTrigger = false;
+      this.checkCountForCurrentTrigger = 0;
       this.logDiagnostic('RTDB TRIGGER', `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Pausing Gemini Vision, camera in standby.`);
       this.state = 'STANDBY';
       this.hudRenderer.clear();
@@ -358,6 +364,19 @@ class SorterApp {
         this.hudRenderer.clear();
         this.hudRenderer.drawScanningGuide(true);
 
+        // Quota Guard 1: If bottle was already detected for this trigger event, don't spam Gemini
+        if (this.hasDetectedForCurrentTrigger) {
+          this.animationFrameId = requestAnimationFrame(loop);
+          return;
+        }
+
+        // Quota Guard 2: If maximum checks per trigger event reached (non-bottle item), don't burn quota
+        if (this.checkCountForCurrentTrigger >= (APP_CONFIG.maxChecksPerTrigger || 3)) {
+          this.tickerLogMsgEl.innerText = `[Gemini Vision] Analyzed item: Not a bottle. Awaiting next object.`;
+          this.animationFrameId = requestAnimationFrame(loop);
+          return;
+        }
+
         const now = performance.now();
         const timeSinceLastFrame = now - this.lastFrameAnalysisTime;
 
@@ -365,6 +384,7 @@ class SorterApp {
         if (!this.isProcessingFrame && geminiVision.isReady() && timeSinceLastFrame >= APP_CONFIG.feedIntervalMs) {
           this.isProcessingFrame = true;
           this.lastFrameAnalysisTime = now;
+          this.checkCountForCurrentTrigger++;
 
           try {
             const result: GeminiVisionResult | null = await geminiVision.analyzeFrame(this.videoEl);
@@ -402,13 +422,14 @@ class SorterApp {
               // 3. Render HUD on canvas (viewfinder brackets + detection banner)
               this.hudRenderer.renderGeminiVisionHUD(result);
 
-              // 4. Log periodically or on positive detection
+              // 4. Log detection attempt
               console.log(
-                `👁️ [GEMINI LIVE FEED] [${inferenceMs}ms] Result: ${isPlasticBottle ? 'BOTTLE' : 'NO BOTTLE'} (${scorePct}%) | Reason: "${reason}"`
+                `👁️ [GEMINI LIVE FEED] [${inferenceMs}ms] (Check ${this.checkCountForCurrentTrigger}/${APP_CONFIG.maxChecksPerTrigger}) Result: ${isPlasticBottle ? 'BOTTLE' : 'NO BOTTLE'} (${scorePct}%) | Reason: "${reason}"`
               );
 
               // 5. Handle verified plastic bottle detection
               if (isPlasticBottle && confidence >= APP_CONFIG.confidenceThreshold) {
+                this.hasDetectedForCurrentTrigger = true;
                 this.onBottleIdentified(result);
               }
             }

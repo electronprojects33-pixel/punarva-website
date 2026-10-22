@@ -24,12 +24,13 @@ export const APP_CONFIG = {
   firestoreCollection: import.meta.env.VITE_FIRESTORE_COLLECTION || "bottle_detections",
   firestoreStatsDoc: "summary", // Document holding bottles_count attribute
 
-  // Google Gemini Vision Live Feed Settings
+  // Google Gemini Vision Live Feed Settings (Quota-Aware: max 15 RPM / 500 RPD)
   geminiApiKey: GEMINI_API_KEY,
-  geminiModel: import.meta.env.VITE_GEMINI_MODEL || "gemini-1.5-flash",
+  geminiModel: import.meta.env.VITE_GEMINI_MODEL || "gemini-3.5-flash-lite",
   confidenceThreshold: 0.70, // 70% minimum confidence
   cooldownMs: 1500,          // Debounce interval between count updates
-  feedIntervalMs: 350,       // Interval between live visual feed checks
+  feedIntervalMs: 2000,      // Conservative sampling interval (avoids 15 RPM limit)
+  maxChecksPerTrigger: 3,    // Limit requests per object_detected event to preserve 500 RPD budget
 
   // Camera Settings
   cameraFacingMode: "environment" as "environment" | "user", // "environment" for rear camera
