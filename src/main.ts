@@ -33,14 +33,6 @@ class SorterApp {
   private btnToggleSoundEl!: HTMLButtonElement;
   private pillRtdbEl!: HTMLElement;
   private pillWakeLockEl!: HTMLElement;
-  private pillGeminiStatusEl!: HTMLElement;
-
-  // Gemini Key Modal DOM
-  private geminiModalEl!: HTMLElement;
-  private inputGeminiKeyEl!: HTMLInputElement;
-  private btnSaveGeminiKeyEl!: HTMLButtonElement;
-  private btnCloseGeminiModalEl!: HTMLButtonElement;
-  private btnToggleKeyVisibilityEl!: HTMLButtonElement;
 
   // Telemetry DOM
   private statTotalBottlesEl!: HTMLElement;
@@ -73,7 +65,6 @@ class SorterApp {
     this.setupListeners();
     this.initFirebase();
     this.initPWA();
-    this.updateGeminiStatusIndicator();
     this.updateUIForState('DISARMED');
     this.logDiagnostic('SYSTEM', 'AeroSort initialized with Google Gemini Live Vision.');
   }
@@ -97,14 +88,6 @@ class SorterApp {
     this.btnToggleSoundEl = document.getElementById('btn-toggle-sound') as HTMLButtonElement;
     this.pillRtdbEl = document.getElementById('pill-rtdb')!;
     this.pillWakeLockEl = document.getElementById('pill-wakelock')!;
-    this.pillGeminiStatusEl = document.getElementById('pill-gemini-status')!;
-
-    // Gemini Modal
-    this.geminiModalEl = document.getElementById('gemini-modal')!;
-    this.inputGeminiKeyEl = document.getElementById('input-gemini-key') as HTMLInputElement;
-    this.btnSaveGeminiKeyEl = document.getElementById('btn-save-gemini-key') as HTMLButtonElement;
-    this.btnCloseGeminiModalEl = document.getElementById('btn-close-gemini-modal') as HTMLButtonElement;
-    this.btnToggleKeyVisibilityEl = document.getElementById('btn-toggle-key-visibility') as HTMLButtonElement;
 
     // Telemetry
     this.statTotalBottlesEl = document.getElementById('stat-total-bottles')!;
@@ -137,26 +120,6 @@ class SorterApp {
     }
   }
 
-  private updateGeminiStatusIndicator() {
-    if (geminiVision.isReady()) {
-      this.pillGeminiStatusEl.innerText = 'ONLINE';
-      this.pillGeminiStatusEl.className = 'tel-val status-connected';
-    } else {
-      this.pillGeminiStatusEl.innerText = 'NO KEY';
-      this.pillGeminiStatusEl.className = 'tel-val status-waiting';
-    }
-  }
-
-  private openGeminiModal() {
-    this.inputGeminiKeyEl.value = geminiVision.getApiKey();
-    this.geminiModalEl.classList.remove('hidden');
-    setTimeout(() => this.inputGeminiKeyEl.focus(), 150);
-  }
-
-  private closeGeminiModal() {
-    this.geminiModalEl.classList.add('hidden');
-  }
-
   private setupListeners() {
     // Arm / Disarm toggle controls
     const toggleArmHandler = () => {
@@ -185,32 +148,6 @@ class SorterApp {
       soundEffects.setEnabled(this.audioEnabled);
       this.btnToggleSoundEl.style.opacity = this.audioEnabled ? '1' : '0.4';
       this.logDiagnostic('AUDIO', `Sound effects ${this.audioEnabled ? 'enabled' : 'muted'}`);
-    });
-
-    // Gemini API Key Config Pill click
-    const geminiPillWrap = document.getElementById('tel-gemini-item');
-    if (geminiPillWrap) {
-      geminiPillWrap.addEventListener('click', () => this.openGeminiModal());
-    }
-
-    // Modal controls
-    this.btnCloseGeminiModalEl.addEventListener('click', () => this.closeGeminiModal());
-    this.btnToggleKeyVisibilityEl.addEventListener('click', () => {
-      const isPass = this.inputGeminiKeyEl.type === 'password';
-      this.inputGeminiKeyEl.type = isPass ? 'text' : 'password';
-      this.btnToggleKeyVisibilityEl.innerText = isPass ? 'Hide' : 'Show';
-    });
-
-    this.btnSaveGeminiKeyEl.addEventListener('click', () => {
-      const enteredKey = this.inputGeminiKeyEl.value.trim();
-      if (!enteredKey) {
-        alert('Please enter a valid Gemini API key.');
-        return;
-      }
-      geminiVision.setApiKey(enteredKey);
-      this.updateGeminiStatusIndicator();
-      this.closeGeminiModal();
-      this.logDiagnostic('GEMINI', 'API Key configured successfully. Gemini Live Visual Feed ready!');
     });
 
     // Tap RTDB indicator to manually toggle object_detected signal for easy testing
@@ -308,8 +245,8 @@ class SorterApp {
   public async armSystem() {
     // Check if Gemini API key is configured
     if (!geminiVision.isReady()) {
-      this.logDiagnostic('GEMINI WARNING', 'Gemini API key is required. Opening setup modal...');
-      this.openGeminiModal();
+      this.logDiagnostic('GEMINI ERROR', 'Gemini API key is missing. Please add your key to GEMINI_API_KEY in src/config.ts or .env');
+      alert('Please set your Gemini API key in src/config.ts or .env before arming.');
       return;
     }
 
@@ -338,7 +275,6 @@ class SorterApp {
       }
 
       this.updateRtdbIndicator();
-      this.updateGeminiStatusIndicator();
 
       // Start continuous frame visual feed pipeline
       this.startFramePipeline();

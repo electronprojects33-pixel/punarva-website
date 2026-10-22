@@ -1,7 +1,10 @@
 // ==============================================================================
-// AEROMODEL CONFIGURATION
-// Credentials are automatically loaded from .env via Vite (import.meta.env)
+// AEROMODEL & GOOGLE GEMINI CONFIGURATION
+// Add your Gemini API key directly in code below or in your .env file
 // ==============================================================================
+
+// Paste your Google Gemini API Key here (or use .env: VITE_GEMINI_API_KEY)
+export const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "YOUR_GEMINI_API_KEY_HERE";
 
 export const FIREBASE_CONFIG = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "",
@@ -22,7 +25,7 @@ export const APP_CONFIG = {
   firestoreStatsDoc: "summary", // Document holding bottles_count attribute
 
   // Google Gemini Vision Live Feed Settings
-  geminiApiKey: import.meta.env.VITE_GEMINI_API_KEY || localStorage.getItem('gemini_api_key') || "",
+  geminiApiKey: GEMINI_API_KEY,
   geminiModel: import.meta.env.VITE_GEMINI_MODEL || "gemini-1.5-flash",
   confidenceThreshold: 0.70, // 70% minimum confidence
   cooldownMs: 1500,          // Debounce interval between count updates

@@ -16,19 +16,13 @@ export class GeminiLiveVisionService {
     this.offscreenCtx = this.offscreenCanvas.getContext('2d', { willReadFrequently: true });
   }
 
-  public setApiKey(key: string) {
-    this.apiKey = key.trim();
-    localStorage.setItem('gemini_api_key', this.apiKey);
-    console.log('🔑 [GEMINI] API Key updated and stored.');
-  }
-
   public getApiKey(): string {
-    return this.apiKey || localStorage.getItem('gemini_api_key') || '';
+    return (APP_CONFIG.geminiApiKey || '').trim();
   }
 
   public isReady(): boolean {
     const key = this.getApiKey();
-    return typeof key === 'string' && key.trim().length > 10;
+    return key.length > 10 && !key.includes('YOUR_GEMINI_API_KEY');
   }
 
   public getInferenceLatency(): number {
