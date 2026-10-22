@@ -43,6 +43,10 @@
             <span class="tel-label">Bottles</span>
             <span id="stat-total-bottles" class="tel-val">0</span>
           </div>
+          <div class="tel-item highlight-prediction">
+            <span class="tel-label">AI</span>
+            <span id="stat-live-prediction" class="tel-val">--</span>
+          </div>
           <div class="tel-item">
             <span class="tel-label">Latency</span>
             <span class="tel-val"><span id="stat-model-latency">0</span>ms</span>
@@ -68,6 +72,21 @@
         <main class="camera-viewport-wrap">
           <video id="camera-video" playsinline muted autoplay></video>
           <canvas id="hud-canvas"></canvas>
+
+          <!-- Live On-Screen AI Detection Diagnostic Ticker -->
+          <div id="ai-live-ticker" class="ai-live-ticker">
+            <div class="ticker-top">
+              <div class="ticker-class-wrap">
+                <span id="ticker-dot" class="ticker-dot"></span>
+                <span id="ticker-class-name">Awaiting Object</span>
+              </div>
+              <span id="ticker-score" class="ticker-score">--</span>
+            </div>
+            <div class="ticker-bar-wrap">
+              <div id="ticker-bar-fill" class="ticker-bar-fill"></div>
+            </div>
+            <div id="ticker-log-msg" class="ticker-log-msg">Ready. Tap 'Arm System' to begin detection.</div>
+          </div>
 
           <!-- Dynamic Camera Stage Overlay (Disarmed & Standby Screens) -->
           <div id="stage-overlay" class="stage-overlay">

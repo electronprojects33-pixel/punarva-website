@@ -1,4 +1,4 @@
-import { DetectedBottle } from '../types';
+import { ClassificationCategory, ClassificationResult } from '../types';
 
 export class HudRenderer {
   private canvas: HTMLCanvasElement;
@@ -30,7 +30,7 @@ export class HudRenderer {
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
   }
 
-  // Draw active scanning laser animation
+  // Draw active scanning laser animation across viewport
   public drawScanningGuide(isScanning: boolean) {
     if (!isScanning) return;
 
@@ -49,16 +49,16 @@ export class HudRenderer {
       this.scanDirection = 1;
     }
 
-    const grad = this.ctx.createLinearGradient(0, this.scanLineY - 20, 0, this.scanLineY + 20);
+    const grad = this.ctx.createLinearGradient(0, this.scanLineY - 24, 0, this.scanLineY + 24);
     grad.addColorStop(0, 'rgba(14, 165, 233, 0)');
-    grad.addColorStop(0.5, 'rgba(14, 165, 233, 0.25)');
+    grad.addColorStop(0.5, 'rgba(14, 165, 233, 0.22)');
     grad.addColorStop(1, 'rgba(14, 165, 233, 0)');
 
     this.ctx.fillStyle = grad;
-    this.ctx.fillRect(0, this.scanLineY - 20, w, 40);
+    this.ctx.fillRect(0, this.scanLineY - 24, w, 48);
 
     this.ctx.strokeStyle = '#38bdf8';
-    this.ctx.lineWidth = 1.5;
+    this.ctx.lineWidth = 2;
     this.ctx.beginPath();
     this.ctx.moveTo(0, this.scanLineY);
     this.ctx.lineTo(w, this.scanLineY);
@@ -67,141 +67,95 @@ export class HudRenderer {
     this.ctx.restore();
   }
 
-  // Render multiple dynamic bounding boxes around detected bottles
-  public renderDetections(
-    bottles: DetectedBottle[],
-    videoEl: HTMLVideoElement
+  // Draw cyber corner target brackets to give the user a clear framing guide without bounding boxes
+  public drawViewfinderBrackets(isHighlighted: boolean = false) {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w === 0 || h === 0) return;
+
+    const margin = Math.min(w, h) * 0.12;
+    const bracketLen = 28;
+    const x1 = margin;
+    const y1 = margin;
+    const x2 = w - margin;
+    const y2 = h - margin;
+
+    this.ctx.save();
+    this.ctx.strokeStyle = isHighlighted ? '#10b981' : 'rgba(255, 255, 255, 0.4)';
+    this.ctx.lineWidth = isHighlighted ? 3.5 : 2;
+    this.ctx.shadowColor = isHighlighted ? 'rgba(16, 185, 129, 0.8)' : 'transparent';
+    this.ctx.shadowBlur = isHighlighted ? 12 : 0;
+
+    this.ctx.beginPath();
+    // Top-left
+    this.ctx.moveTo(x1, y1 + bracketLen);
+    this.ctx.lineTo(x1, y1);
+    this.ctx.lineTo(x1 + bracketLen, y1);
+    // Top-right
+    this.ctx.moveTo(x2 - bracketLen, y1);
+    this.ctx.lineTo(x2, y1);
+    this.ctx.lineTo(x2, y1 + bracketLen);
+    // Bottom-left
+    this.ctx.moveTo(x1, y2 - bracketLen);
+    this.ctx.lineTo(x1, y2);
+    this.ctx.lineTo(x1 + bracketLen, y2);
+    // Bottom-right
+    this.ctx.moveTo(x2 - bracketLen, y2);
+    this.ctx.lineTo(x2, y2);
+    this.ctx.lineTo(x2, y2 - bracketLen);
+    this.ctx.stroke();
+
+    this.ctx.restore();
+  }
+
+  // Render on-canvas Classification HUD: status banner and confidence readouts (NO bounding boxes)
+  public renderClassificationHUD(
+    result: ClassificationResult,
+    isPlasticBottle: boolean,
+    confidencePct: number
   ) {
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    if (w === 0 || h === 0) return;
+
     const ctx = this.ctx;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const vw = videoEl.videoWidth;
-    const vh = videoEl.videoHeight;
+    ctx.save();
 
-    if (cw === 0 || ch === 0 || vw === 0 || vh === 0) return;
+    // 1. Draw Viewfinder Frame Reticles
+    this.drawViewfinderBrackets(isPlasticBottle);
 
-    // Calculate object-fit: cover scaling and letterbox offsets
-    const canvasAspect = cw / ch;
-    const videoAspect = vw / vh;
+    // 2. Detection Banner when Plastic Bottle is identified
+    if (isPlasticBottle) {
+      const bannerW = Math.min(320, w - 32);
+      const bannerH = 46;
+      const bannerX = (w - bannerW) / 2;
+      const bannerY = 24;
 
-    let renderW = cw;
-    let renderH = ch;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    if (canvasAspect > videoAspect) {
-      renderH = cw / videoAspect;
-      offsetY = (ch - renderH) / 2;
-    } else {
-      renderW = ch * videoAspect;
-      offsetX = (cw - renderW) / 2;
-    }
-
-    const scaleX = renderW / vw;
-    const scaleY = renderH / vh;
-
-    // 1. Draw individual bounding box for every bottle
-    for (const bottle of bottles) {
-      const { originX, originY, width, height } = bottle.boundingBox;
-      
-      const x = Math.round((originX * scaleX) + offsetX);
-      const y = Math.round((originY * scaleY) + offsetY);
-      const w = Math.round(width * scaleX);
-      const h = Math.round(height * scaleY);
-
-      const scorePct = Math.round(bottle.score * 100);
-
-      ctx.save();
-
-      // Translucent emerald fill
-      ctx.fillStyle = 'rgba(16, 185, 129, 0.15)';
-      ctx.fillRect(x, y, w, h);
-
-      // Glowing border
+      // Outer glow & emerald backdrop
       ctx.shadowColor = 'rgba(16, 185, 129, 0.6)';
-      ctx.shadowBlur = 12;
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 2.5;
-      ctx.strokeRect(x, y, w, h);
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = 'rgba(6, 78, 59, 0.92)';
+      ctx.beginPath();
+      ctx.roundRect(bannerX, bannerY, bannerW, bannerH, 12);
+      ctx.fill();
 
-      // Cyber corner brackets
-      const cornerSize = Math.max(10, Math.min(w, h) * 0.22);
       ctx.strokeStyle = '#34d399';
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      // Top-left
-      ctx.moveTo(x, y + cornerSize);
-      ctx.lineTo(x, y);
-      ctx.lineTo(x + cornerSize, y);
-      // Top-right
-      ctx.moveTo(x + w - cornerSize, y);
-      ctx.lineTo(x + w, y);
-      ctx.lineTo(x + w, y + cornerSize);
-      // Bottom-left
-      ctx.moveTo(x, y + h - cornerSize);
-      ctx.lineTo(x, y + h);
-      ctx.lineTo(x + cornerSize, y + h);
-      // Bottom-right
-      ctx.moveTo(x + w - cornerSize, y + h);
-      ctx.lineTo(x + w, y + h);
-      ctx.lineTo(x + w, y + h - cornerSize);
+      ctx.lineWidth = 2;
       ctx.stroke();
-
-      // Center crosshair
-      const cx = x + w / 2;
-      const cy = y + h / 2;
-      ctx.strokeStyle = 'rgba(52, 211, 153, 0.8)';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.moveTo(cx - 8, cy);
-      ctx.lineTo(cx + 8, cy);
-      ctx.moveTo(cx, cy - 8);
-      ctx.lineTo(cx, cy + 8);
-      ctx.stroke();
-
-      // Label Tag Badge
-      const labelText = `PLASTIC BOTTLE ${scorePct}%`;
-      ctx.font = 'bold 11px "JetBrains Mono", monospace';
-      const textMetrics = ctx.measureText(labelText);
-      const badgeW = textMetrics.width + 16;
-      const badgeH = 22;
-      const badgeY = Math.max(8, y - badgeH - 3);
 
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#064e3b';
-      ctx.beginPath();
-      ctx.roundRect(x, badgeY, badgeW, badgeH, 4);
-      ctx.fill();
 
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      // Banner text
+      ctx.font = 'bold 14px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#6ee7b7';
+      ctx.textAlign = 'center';
+      ctx.fillText(`PLASTIC BOTTLE DETECTED`, bannerX + bannerW / 2, bannerY + 20);
 
-      ctx.fillStyle = '#a7f3d0';
-      ctx.fillText(labelText, x + 8, badgeY + 15);
-
-      ctx.restore();
+      ctx.font = '600 12px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#ffffff';
+      ctx.fillText(`Confidence: ${confidencePct}%`, bannerX + bannerW / 2, bannerY + 37);
     }
 
-    // 2. Multiple Bottles Found Pill (top-left)
-    if (bottles.length > 0) {
-      ctx.save();
-      const countText = `DETECTED: ${bottles.length} ${bottles.length === 1 ? 'BOTTLE' : 'BOTTLES'}`;
-      ctx.font = 'bold 12px "JetBrains Mono", monospace';
-      const metric = ctx.measureText(countText);
-      const pillW = metric.width + 20;
-
-      ctx.fillStyle = 'rgba(6, 78, 59, 0.9)';
-      ctx.strokeStyle = '#10b981';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.roundRect(14, 14, pillW, 28, 8);
-      ctx.fill();
-      ctx.stroke();
-
-      ctx.fillStyle = '#34d399';
-      ctx.fillText(countText, 24, 32);
-      ctx.restore();
-    }
+    ctx.restore();
   }
 }

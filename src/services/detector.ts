@@ -1,9 +1,8 @@
 import { FilesetResolver, ImageClassifier } from '@mediapipe/tasks-vision';
 import { APP_CONFIG } from '../config';
-import { DetectedBottle, DetectionResult } from '../types';
-import { objectLocalizer } from './localizer';
+import { ClassificationCategory, ClassificationResult } from '../types';
 
-export class TeachableMachineDetectorService {
+export class TeachableMachineClassifierService {
   private classifier: ImageClassifier | null = null;
   private isInitializing: boolean = false;
   private isInferring: boolean = false;
@@ -29,10 +28,10 @@ export class TeachableMachineDetectorService {
             this.labelsMap[defaultIndex] = line.replace(/\s+/g, '_');
           }
         });
-        console.log('Loaded class labels for Teachable Machine:', this.labelsMap);
+        console.log('✅ [LABELS] Successfully loaded class labels:', this.labelsMap);
       }
     } catch (e) {
-      console.warn('Could not fetch labels.txt, using default map:', e);
+      console.warn('⚠️ [LABELS] Could not fetch labels.txt, using default map:', e);
     }
   }
 
@@ -45,6 +44,7 @@ export class TeachableMachineDetectorService {
     }
 
     this.isInitializing = true;
+    console.log(`🚀 [MODEL] Initializing Teachable Machine model from: ${modelPath}`);
     await this.loadLabels(labelsPath);
 
     try {
@@ -62,9 +62,9 @@ export class TeachableMachineDetectorService {
           runningMode: 'VIDEO',
           maxResults: 2
         });
-        console.log('Teachable Machine Classifier initialized with GPU acceleration');
+        console.log('⚡ [MODEL] Initialized with GPU acceleration delegate');
       } catch (gpuErr) {
-        console.warn('GPU delegate unavailable, falling back to CPU/WASM:', gpuErr);
+        console.warn('⚠️ [MODEL] GPU delegate unavailable, falling back to CPU/WASM:', gpuErr);
         this.classifier = await ImageClassifier.createFromOptions(vision, {
           baseOptions: {
             modelAssetPath: modelPath,
@@ -73,14 +73,14 @@ export class TeachableMachineDetectorService {
           runningMode: 'VIDEO',
           maxResults: 2
         });
-        console.log('Teachable Machine Classifier initialized with CPU/WASM');
+        console.log('⚙️ [MODEL] Initialized with CPU/WASM delegate');
       }
 
       this.isInitializing = false;
       return { success: true, message: 'Teachable Machine model loaded successfully' };
     } catch (err: any) {
       this.isInitializing = false;
-      console.error('Failed to initialize Teachable Machine Classifier:', err);
+      console.error('❌ [MODEL] Failed to initialize classifier:', err);
       return { 
         success: false, 
         message: err.message || 'Model load failed.' 
@@ -88,11 +88,11 @@ export class TeachableMachineDetectorService {
     }
   }
 
-  // Classifies frame with Teachable Machine AND calculates real dynamic bounding boxes!
-  public detectFrame(
+  // Pure classification on the video frame
+  public classifyFrame(
     video: HTMLVideoElement,
     timestampMs: number
-  ): DetectionResult | null {
+  ): ClassificationResult | null {
     if (!this.classifier || this.isInferring || video.readyState < 2) {
       return null;
     }
@@ -104,57 +104,38 @@ export class TeachableMachineDetectorService {
       const result = this.classifier.classifyForVideo(video, timestampMs);
       this.lastInferenceTimeMs = Math.round(performance.now() - start);
 
-      const bottleDetections: DetectedBottle[] = [];
-      const allDetections: DetectedBottle[] = [];
+      const parsedCategories: ClassificationCategory[] = [];
 
       if (result && result.classifications && result.classifications.length > 0) {
         const topCategories = result.classifications[0].categories;
-        
-        // Find Plastic_Bottle prediction from Teachable Machine
-        let bottleCategory = topCategories.find((cat) => {
-          const name = (cat.categoryName && cat.categoryName.trim().length > 0)
+        for (const cat of topCategories) {
+          const mappedName = (cat.categoryName && cat.categoryName.trim().length > 0)
             ? cat.categoryName
             : (this.labelsMap[cat.index] || `Class_${cat.index}`);
-          return name.toLowerCase().includes('bottle') || name.toLowerCase().includes('plastic');
-        });
 
-        // Fallback: check index 0
-        if (!bottleCategory && topCategories.length > 0) {
-          const top = topCategories[0];
-          const mappedName = this.labelsMap[top.index] || '';
-          if (mappedName.toLowerCase().includes('bottle') || top.index === 0) {
-            bottleCategory = top;
-          }
-        }
-
-        const score = bottleCategory ? bottleCategory.score : 0;
-        const isBottle = score >= APP_CONFIG.confidenceThreshold;
-
-        // When Teachable Machine confirms a Plastic Bottle is in view:
-        // Use smart visual localization to generate real dynamic bounding boxes!
-        if (isBottle) {
-          const candidateBoxes = objectLocalizer.findObjectBoxes(video);
-          
-          for (const box of candidateBoxes) {
-            const detectedItem: DetectedBottle = {
-              category: 'Plastic_Bottle',
-              score: score,
-              boundingBox: box
-            };
-            bottleDetections.push(detectedItem);
-            allDetections.push(detectedItem);
-          }
+          parsedCategories.push({
+            index: cat.index,
+            score: cat.score,
+            categoryName: mappedName
+          });
         }
       }
 
+      // Sort descending by score
+      parsedCategories.sort((a, b) => b.score - a.score);
+
+      const topCategory = parsedCategories.length > 0
+        ? parsedCategories[0]
+        : { index: -1, score: 0, categoryName: 'Unknown' };
+
       this.isInferring = false;
       return {
-        bottles: bottleDetections,
-        allDetections,
+        categories: parsedCategories,
+        topCategory,
         inferenceMs: this.lastInferenceTimeMs
       };
     } catch (err) {
-      console.error('Error during video detection:', err);
+      console.error('❌ [MODEL] Classification error:', err);
       this.isInferring = false;
       return null;
     }
@@ -180,4 +161,4 @@ export class TeachableMachineDetectorService {
   }
 }
 
-export const plasticDetector = new TeachableMachineDetectorService();
+export const plasticClassifier = new TeachableMachineClassifierService();

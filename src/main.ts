@@ -1,11 +1,11 @@
 import './style.css';
 import confetti from 'canvas-confetti';
 import { APP_CONFIG } from './config';
-import { DetectedBottle, SorterState } from './types';
+import { ClassificationCategory, ClassificationResult, SorterState } from './types';
 import { soundEffects } from './services/audio';
 import { wakeLockManager } from './services/wakelock';
 import { firebaseService } from './services/firebase';
-import { plasticDetector } from './services/detector';
+import { plasticClassifier } from './services/detector';
 import { HudRenderer } from './ui/hud';
 
 class SorterApp {
@@ -36,8 +36,17 @@ class SorterApp {
 
   // Telemetry DOM
   private statTotalBottlesEl!: HTMLElement;
+  private statLivePredictionEl!: HTMLElement;
   private statModelLatencyEl!: HTMLElement;
   private statStreamFpsEl!: HTMLElement;
+
+  // Live On-Screen AI Diagnostics Ticker
+  private aiLiveTickerEl!: HTMLElement;
+  private tickerDotEl!: HTMLElement;
+  private tickerClassNameEl!: HTMLElement;
+  private tickerScoreEl!: HTMLElement;
+  private tickerBarFillEl!: HTMLElement;
+  private tickerLogMsgEl!: HTMLElement;
 
   // Runtime Tracking
   private frameCount: number = 0;
@@ -45,6 +54,7 @@ class SorterApp {
   private currentFps: number = 0;
   private totalBottlesDetected: number = 0;
   private lastDetectionTime: number = 0;
+  private lastPeriodicLogTime: number = 0;
   private animationFrameId: number | null = null;
   private isProcessingFrame: boolean = false;
   private currentFacingMode: 'environment' | 'user' = APP_CONFIG.cameraFacingMode;
@@ -56,6 +66,7 @@ class SorterApp {
     this.initFirebase();
     this.initPWA();
     this.updateUIForState('DISARMED');
+    this.logDiagnostic('SYSTEM', 'Application initialized. Awaiting user arming.');
   }
 
   private bindDom() {
@@ -79,12 +90,36 @@ class SorterApp {
     this.pillWakeLockEl = document.getElementById('pill-wakelock')!;
 
     this.statTotalBottlesEl = document.getElementById('stat-total-bottles')!;
+    this.statLivePredictionEl = document.getElementById('stat-live-prediction')!;
     this.statModelLatencyEl = document.getElementById('stat-model-latency')!;
     this.statStreamFpsEl = document.getElementById('stat-stream-fps')!;
+
+    this.aiLiveTickerEl = document.getElementById('ai-live-ticker')!;
+    this.tickerDotEl = document.getElementById('ticker-dot')!;
+    this.tickerClassNameEl = document.getElementById('ticker-class-name')!;
+    this.tickerScoreEl = document.getElementById('ticker-score')!;
+    this.tickerBarFillEl = document.getElementById('ticker-bar-fill')!;
+    this.tickerLogMsgEl = document.getElementById('ticker-log-msg')!;
+  }
+
+  // Centralized diagnostic logging for console & live mobile screen
+  private logDiagnostic(tag: string, message: string, data?: any) {
+    const timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const formatted = `[${timeStr}] [${tag}] ${message}`;
+
+    if (data !== undefined) {
+      console.log(formatted, data);
+    } else {
+      console.log(formatted);
+    }
+
+    if (this.tickerLogMsgEl) {
+      this.tickerLogMsgEl.innerText = formatted;
+    }
   }
 
   private setupListeners() {
-    // Arm / Disarm controls
+    // Arm / Disarm toggle controls
     const toggleArmHandler = () => {
       if (this.state === 'DISARMED') {
         this.armSystem();
@@ -99,6 +134,7 @@ class SorterApp {
     // Flip camera
     this.btnFlipCamEl.addEventListener('click', async () => {
       this.currentFacingMode = this.currentFacingMode === 'environment' ? 'user' : 'environment';
+      this.logDiagnostic('CAMERA', `Switched camera facing mode to: ${this.currentFacingMode}`);
       if (this.state !== 'DISARMED') {
         await this.startCamera();
       }
@@ -109,6 +145,7 @@ class SorterApp {
       this.audioEnabled = !this.audioEnabled;
       soundEffects.setEnabled(this.audioEnabled);
       this.btnToggleSoundEl.style.opacity = this.audioEnabled ? '1' : '0.4';
+      this.logDiagnostic('AUDIO', `Sound effects ${this.audioEnabled ? 'enabled' : 'muted'}`);
     });
 
     // Tap RTDB indicator to manually toggle object_detected signal for easy testing
@@ -117,7 +154,7 @@ class SorterApp {
     this.pillRtdbEl.addEventListener('click', async () => {
       const current = firebaseService.getTriggerState();
       const next = !current;
-      console.log(`Manually toggling RTDB object_detected to ${next}`);
+      this.logDiagnostic('RTDB MANUAL', `Toggling RTDB "${APP_CONFIG.rtdbTriggerPath}" to: ${next}`);
       await firebaseService.setTriggerValue(next);
     });
 
@@ -130,12 +167,14 @@ class SorterApp {
       if (confirm('Are you sure you want to reset the Firestore bottles_count to zero?')) {
         this.btnResetCounterEl.disabled = true;
         this.btnResetCounterEl.innerText = 'Resetting...';
+        this.logDiagnostic('FIRESTORE', 'Resetting bottles_count to 0...');
         await firebaseService.resetBottleCount();
         this.totalBottlesDetected = 0;
         this.statTotalBottlesEl.innerText = '0';
         this.resetSectionCountEl.innerText = '0';
         this.btnResetCounterEl.disabled = false;
         this.btnResetCounterEl.innerText = 'Reset Bottle Count to Zero';
+        this.logDiagnostic('FIRESTORE', 'Bottle count successfully reset to 0');
       }
     });
 
@@ -143,12 +182,13 @@ class SorterApp {
     wakeLockManager.onStatusChange((active) => {
       this.pillWakeLockEl.innerText = active ? 'ON' : 'OFF';
       this.pillWakeLockEl.style.color = active ? '#059669' : '#64748b';
+      this.logDiagnostic('WAKELOCK', `Screen wake lock is now: ${active ? 'ACTIVE' : 'RELEASED'}`);
     });
   }
 
   private initFirebase() {
     const initResult = firebaseService.initialize();
-    console.log('Firebase Init:', initResult);
+    this.logDiagnostic('FIREBASE', initResult.message);
 
     // RTDB Trigger listener for object_detected
     firebaseService.onTriggerChange((triggered) => {
@@ -160,6 +200,7 @@ class SorterApp {
       this.totalBottlesDetected = count;
       this.statTotalBottlesEl.innerText = `${count}`;
       this.resetSectionCountEl.innerText = `${count}`;
+      this.logDiagnostic('FIRESTORE', `Live sync: bottles_count is now ${count}`);
     });
 
     this.updateRtdbIndicator();
@@ -181,17 +222,17 @@ class SorterApp {
     this.updateRtdbIndicator();
 
     if (this.state === 'DISARMED') {
-      console.info('RTDB object_detected changed, but system is disarmed. Awaiting user arming.');
+      this.logDiagnostic('RTDB', `Signal changed (${APP_CONFIG.rtdbTriggerPath}=${triggered}), awaiting system arming.`);
       return;
     }
 
     if (triggered) {
-      console.log('Signal received: object_detected == true. Activating camera viewfinder and multi-bottle detection!');
+      this.logDiagnostic('RTDB TRIGGER', `Signal ON (${APP_CONFIG.rtdbTriggerPath}=true) -> Activating camera feed & AI classification!`);
       soundEffects.playScannerActive();
       this.state = 'SCANNING';
       this.updateUIForState('SCANNING');
     } else {
-      console.log('Signal ended: object_detected == false. Returning camera view to standby.');
+      this.logDiagnostic('RTDB TRIGGER', `Signal OFF (${APP_CONFIG.rtdbTriggerPath}=false) -> Pausing classification, camera in standby.`);
       this.state = 'STANDBY';
       this.hudRenderer.clear();
       this.updateUIForState('STANDBY');
@@ -201,6 +242,7 @@ class SorterApp {
   // Arm the system (requests camera, wake lock, loads model)
   public async armSystem() {
     this.btnArmStageEl.disabled = true;
+    this.logDiagnostic('SYSTEM', 'Arming system: requesting camera and loading AI model...');
 
     try {
       // 1. Acquire Screen Wake Lock
@@ -209,11 +251,14 @@ class SorterApp {
       // 2. Start Camera
       await this.startCamera();
 
-      // 3. Load Teachable Machine Detection Model (with dynamic bounding boxes)
-      if (!plasticDetector.isReady()) {
-        const modelRes = await plasticDetector.initialize(APP_CONFIG.modelUrl, APP_CONFIG.labelsUrl);
+      // 3. Load Teachable Machine Image Classifier
+      if (!plasticClassifier.isReady()) {
+        this.logDiagnostic('MODEL', `Loading TFLite model from ${APP_CONFIG.modelUrl}...`);
+        const modelRes = await plasticClassifier.initialize(APP_CONFIG.modelUrl, APP_CONFIG.labelsUrl);
         if (!modelRes.success) {
-          console.warn('Model notice:', modelRes.message);
+          this.logDiagnostic('MODEL WARNING', modelRes.message);
+        } else {
+          this.logDiagnostic('MODEL READY', 'Teachable Machine model loaded successfully!');
         }
       }
 
@@ -223,10 +268,12 @@ class SorterApp {
       if (firebaseService.getTriggerState()) {
         this.state = 'SCANNING';
         this.updateUIForState('SCANNING');
+        this.logDiagnostic('SYSTEM', 'System ARMED & active (RTDB signal already ON)');
       } else {
         // Armed, but signal hasn't arrived: show Standby shutter screen
         this.state = 'STANDBY';
         this.updateUIForState('STANDBY');
+        this.logDiagnostic('SYSTEM', 'System ARMED in STANDBY. Waiting for RTDB object_detected = true');
       }
 
       this.updateRtdbIndicator();
@@ -234,7 +281,7 @@ class SorterApp {
       // Start continuous frame detection pipeline
       this.startFramePipeline();
     } catch (err: any) {
-      console.error('Failed to arm system:', err);
+      this.logDiagnostic('ERROR', `Failed to arm system: ${err.message || err}`);
       alert('Camera access denied or hardware error: ' + (err.message || err));
       this.disarmSystem();
     } finally {
@@ -260,7 +307,16 @@ class SorterApp {
       this.animationFrameId = null;
     }
 
+    this.statLivePredictionEl.innerText = '--';
+    this.statLivePredictionEl.style.color = '';
+    this.tickerClassNameEl.innerText = 'System Disarmed';
+    this.tickerScoreEl.innerText = '--';
+    this.tickerBarFillEl.style.width = '0%';
+    this.tickerBarFillEl.className = 'ticker-bar-fill';
+    this.tickerDotEl.className = 'ticker-dot';
+
     this.updateUIForState('DISARMED');
+    this.logDiagnostic('SYSTEM', 'System DISARMED. Camera and AI stopped.');
   }
 
   private async startCamera() {
@@ -286,9 +342,11 @@ class SorterApp {
     this.videoEl.onloadedmetadata = () => {
       this.hudRenderer.syncSize(this.videoEl);
     };
+
+    this.logDiagnostic('CAMERA', `Camera stream running (${this.currentFacingMode})`);
   }
 
-  // Real-time camera frame detection pipeline (actively draws multiple bounding boxes)
+  // Real-time camera classification pipeline (pure image classification, no bounding boxes)
   private startFramePipeline() {
     const loop = (timestamp: number) => {
       this.calculateFps(timestamp);
@@ -302,20 +360,64 @@ class SorterApp {
         this.hudRenderer.clear();
         this.hudRenderer.drawScanningGuide(true);
 
-        if (!this.isProcessingFrame && plasticDetector.isReady()) {
+        if (!this.isProcessingFrame && plasticClassifier.isReady()) {
           this.isProcessingFrame = true;
 
-          const result = plasticDetector.detectFrame(this.videoEl, timestamp);
+          const result: ClassificationResult | null = plasticClassifier.classifyFrame(this.videoEl, timestamp);
           if (result) {
-            const { bottles, inferenceMs } = result;
+            const { categories, topCategory, inferenceMs } = result;
 
             this.statModelLatencyEl.innerText = `${inferenceMs}`;
 
-            // Draw bounding boxes around all detected bottles
-            this.hudRenderer.renderDetections(bottles, this.videoEl);
+            // Locate Plastic_Bottle category
+            const plasticCategory = categories.find((c) =>
+              c.categoryName.toLowerCase().includes('bottle') ||
+              c.categoryName.toLowerCase().includes('plastic')
+            ) || (topCategory.categoryName.toLowerCase().includes('plastic') ? topCategory : null);
 
-            if (bottles.length > 0) {
-              this.onBottlesDetected(bottles);
+            const plasticScore = plasticCategory ? plasticCategory.score : 0;
+            const plasticPct = Math.round(plasticScore * 100);
+            const topPct = Math.round(topCategory.score * 100);
+
+            // Is plastic bottle identified above confidence threshold?
+            const isBottleIdentified = plasticScore >= APP_CONFIG.confidenceThreshold;
+
+            // 1. Update on-screen telemetry prediction chip
+            const displayLabel = isBottleIdentified
+              ? `Bottle ${plasticPct}%`
+              : `${topCategory.categoryName.replace('_', ' ')} ${topPct}%`;
+            this.statLivePredictionEl.innerText = displayLabel;
+            this.statLivePredictionEl.style.color = isBottleIdentified ? '#059669' : '#0284c7';
+
+            // 2. Update Live Diagnostics Ticker card
+            if (isBottleIdentified) {
+              this.tickerClassNameEl.innerText = 'Plastic Bottle Detected';
+              this.tickerScoreEl.innerText = `${plasticPct}%`;
+              this.tickerBarFillEl.style.width = `${plasticPct}%`;
+              this.tickerBarFillEl.className = 'ticker-bar-fill plastic';
+              this.tickerDotEl.className = 'ticker-dot active-plastic';
+            } else {
+              this.tickerClassNameEl.innerText = topCategory.categoryName.replace('_', ' ');
+              this.tickerScoreEl.innerText = `${topPct}%`;
+              this.tickerBarFillEl.style.width = `${topPct}%`;
+              this.tickerBarFillEl.className = 'ticker-bar-fill other';
+              this.tickerDotEl.className = 'ticker-dot active-other';
+            }
+
+            // 3. Render HUD on canvas (viewfinder brackets + detection banner, no bounding boxes)
+            this.hudRenderer.renderClassificationHUD(result, isBottleIdentified, plasticPct);
+
+            // 4. Periodic diagnostic log to avoid console flood (every 1.2s during normal scanning)
+            const now = performance.now();
+            if (now - this.lastPeriodicLogTime > 1200) {
+              this.lastPeriodicLogTime = now;
+              const categoriesSummary = categories.map((c) => `${c.categoryName}: ${(c.score * 100).toFixed(1)}%`).join(' | ');
+              console.log(`🔍 [AI CLASSIFIER] [${inferenceMs}ms] ${categoriesSummary} (Threshold: ${APP_CONFIG.confidenceThreshold * 100}%)`);
+            }
+
+            // 5. Handle Plastic Bottle Detection
+            if (isBottleIdentified) {
+              this.onBottleIdentified(plasticCategory || topCategory, inferenceMs);
             }
           }
 
@@ -329,30 +431,43 @@ class SorterApp {
     this.animationFrameId = requestAnimationFrame(loop);
   }
 
-  // Triggered when one or more plastic bottles are recognized
-  private onBottlesDetected(bottles: DetectedBottle[]) {
+  // Triggered when plastic bottle is classified
+  private onBottleIdentified(category: ClassificationCategory, inferenceMs: number) {
     const now = performance.now();
+    const timeSinceLast = now - this.lastDetectionTime;
+    const scorePct = Math.round(category.score * 100);
 
-    // Check debounce / cooldown
-    if (now - this.lastDetectionTime < APP_CONFIG.cooldownMs) {
+    // Check debounce / cooldown window
+    if (timeSinceLast < APP_CONFIG.cooldownMs) {
+      const remainingMs = Math.round(APP_CONFIG.cooldownMs - timeSinceLast);
+      // Helpful log for why increment wasn't sent yet
+      if (Math.random() < 0.2) { // sample to avoid console log spam
+        console.warn(`⏳ [COOLDOWN ACTIVE] Plastic bottle detected (${scorePct}%), but cooldown has ${remainingMs}ms left.`);
+      }
       return;
     }
 
     this.lastDetectionTime = now;
+
+    // Verbose log for successful detection
+    this.logDiagnostic(
+      'DETECTION RESULT',
+      `🍾 PLASTIC BOTTLE CONFIRMED! Score: ${scorePct}% (Threshold: ${Math.round(APP_CONFIG.confidenceThreshold * 100)}%) | Latency: ${inferenceMs}ms -> Incrementing Firestore bottles_count (+1)...`
+    );
 
     // Audio chime
     soundEffects.playDetectionChime();
 
     // Confetti burst
     confetti({
-      particleCount: 22,
+      particleCount: 24,
       spread: 60,
       origin: { y: 0.65 },
       colors: ['#059669', '#10b981', '#38bdf8']
     });
 
-    // Non-blocking Firestore update: increments bottles_count by number of bottles found
-    firebaseService.recordBottleDetection(bottles);
+    // Non-blocking Firestore update: increments bottles_count by 1
+    firebaseService.recordBottleDetection(category);
 
     // Briefly pulse status badge to DETECTED
     this.state = 'DETECTED';
@@ -363,7 +478,7 @@ class SorterApp {
         this.state = 'SCANNING';
         this.updateUIForState('SCANNING');
       }
-    }, 600);
+    }, 700);
   }
 
   private calculateFps(timestamp: number) {
@@ -407,7 +522,7 @@ class SorterApp {
 
       this.btnToggleArmLabel.innerText = 'Disarm';
       this.btnToggleArmEl.className = 'btn btn-danger btn-pill';
-    } else if (st === 'SCANNING') {
+    } else if (st === 'SCANNING' || st === 'DETECTED') {
       // Pin to top, lock scrolling
       this.scrollableContainerEl.scrollTo({ top: 0, behavior: 'smooth' });
       this.scrollableContainerEl.classList.add('locked');

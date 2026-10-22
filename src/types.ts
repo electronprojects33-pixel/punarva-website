@@ -6,22 +6,15 @@ export type SorterState =
   | 'COOLDOWN'           // Brief interval to prevent duplicate writes for the same object
   | 'ERROR';             // Camera or model initialization failure
 
-export interface BoundingBox {
-  originX: number;
-  originY: number;
-  width: number;
-  height: number;
-}
-
-export interface DetectedBottle {
-  category: string;
+export interface ClassificationCategory {
+  index: number;
   score: number;
-  boundingBox: BoundingBox;
+  categoryName: string;
 }
 
-export interface DetectionResult {
-  bottles: DetectedBottle[];
-  allDetections: DetectedBottle[];
+export interface ClassificationResult {
+  categories: ClassificationCategory[];
+  topCategory: ClassificationCategory;
   inferenceMs: number;
 }
 
@@ -31,7 +24,6 @@ export interface BottleDetectionEvent {
   formattedTime: string;
   category: string;
   confidence: number;
-  count: number;
   status: 'SYNCED' | 'PENDING' | 'FAILED';
   firestoreDocId?: string;
   latencyMs: number;
